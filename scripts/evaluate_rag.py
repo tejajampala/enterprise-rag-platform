@@ -10,9 +10,13 @@ from statistics import fmean
 from typing import Any
 
 from consumer_finance_rag import __version__
-from consumer_finance_rag.acquisition import JsonFixtureSource
-from consumer_finance_rag.chunking import ParagraphChunker
 from consumer_finance_rag.config import AppSettings, load_settings
+from consumer_finance_rag.corpus import (
+    CorpusSnapshot,
+    evaluation_runtime_settings,
+    load_corpus_snapshot,
+    validate_indexed_corpus,
+)
 from consumer_finance_rag.evaluation.dataset import load_evaluation_set, validate_evaluation_set
 from consumer_finance_rag.evaluation.mlflow_genai import run_mlflow_judges
 from consumer_finance_rag.evaluation.models import (
@@ -30,8 +34,8 @@ from consumer_finance_rag.evaluation.tracking import (
     git_commit_sha,
 )
 from consumer_finance_rag.factory import build_pipeline, build_retrieval_service
-from consumer_finance_rag.normalization import normalize_records
 from consumer_finance_rag.observability import NoOpTracer, bedrock_token_usage
+from consumer_finance_rag.vector_store import QdrantHybridStore
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -47,12 +51,24 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _parameters(settings: AppSettings, dataset_name: str, dataset_version: str) -> dict[str, Any]:
+def _parameters(
+    settings: AppSettings,
+    dataset_name: str,
+    dataset_version: str,
+    dataset_status: str,
+    corpus: CorpusSnapshot,
+) -> dict[str, Any]:
     return {
         "app.version": __version__,
         "git.commit": git_commit_sha(),
         "evaluation.dataset_name": dataset_name,
         "evaluation.dataset_version": dataset_version,
+        "evaluation.dataset_status": dataset_status,
+        "corpus.mode": "evaluation",
+        "corpus.document_count": len(corpus.documents),
+        "corpus.chunk_count": len(corpus.chunks),
+        "corpus.fixture_document_count": corpus.fixture_document_count,
+        "corpus.expanded_document_count": corpus.expanded_document_count,
         "embedding.provider": settings.models.embedding.provider,
         "embedding.model": settings.models.embedding.model,
         "reranker.provider": settings.models.reranker.provider,
@@ -127,7 +143,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.retrieval_only and (args.with_mlflow_judges or args.with_ragas):
         raise SystemExit("--retrieval-only cannot be combined with paid judge switches")
 
-    settings = load_settings(args.config)
+    settings = evaluation_runtime_settings(load_settings(args.config))
     if args.no_mlflow:
         settings = settings.model_copy(
             update={"mlflow": settings.mlflow.model_copy(update={"enabled": False})}
@@ -135,16 +151,24 @@ def main(argv: Sequence[str] | None = None) -> int:
     dataset = load_evaluation_set(args.dataset or settings.evaluation.dataset_path)
     if args.limit:
         dataset = dataset.model_copy(update={"cases": dataset.cases[: args.limit]})
-    source = JsonFixtureSource("data/fixtures/cfpb_consumer_finance.json")
-    documents = normalize_records(source.acquire())
-    chunker = ParagraphChunker(settings.chunking.chunk_size, settings.chunking.overlap)
-    chunks = [chunk for document in documents for chunk in chunker.chunk(document)]
-    validate_evaluation_set(dataset, documents=documents, chunks=chunks)
+    corpus = load_corpus_snapshot(settings, require_expanded=True)
+    validate_evaluation_set(dataset, documents=corpus.documents, chunks=corpus.chunks)
     output_directory = args.output_directory or settings.mlflow.report_directory
-    parameters = _parameters(settings, dataset.name, dataset.version)
+    parameters = _parameters(settings, dataset.name, dataset.version, dataset.status, corpus)
+    for category, count in corpus.category_distribution.items():
+        parameters[f"corpus.category.{category}"] = count
 
     if args.retrieval_only:
-        service = build_retrieval_service(settings, tracer=NoOpTracer())
+        service = build_retrieval_service(
+            settings,
+            bm25_state_path=settings.evaluation.bm25_state_path,
+            tracer=NoOpTracer(),
+        )
+        validate_indexed_corpus(
+            corpus,
+            sparse_encoder=service.sparse_encoder,
+            store=QdrantHybridStore(settings.qdrant),
+        )
         parameters["bm25.k1"] = service.sparse_encoder.state.k1
         parameters["bm25.b"] = service.sparse_encoder.state.b
         retrieval_report = evaluate_retrieval(
@@ -166,7 +190,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"Retrieval-only evaluation complete: {paths[0]}")
         return 0
 
-    pipeline = build_pipeline(settings)
+    pipeline = build_pipeline(settings, bm25_state_path=settings.evaluation.bm25_state_path)
+    validate_indexed_corpus(
+        corpus,
+        sparse_encoder=pipeline.retrieval.sparse_encoder,
+        store=QdrantHybridStore(settings.qdrant),
+    )
     parameters["bm25.k1"] = pipeline.retrieval.sparse_encoder.state.k1
     parameters["bm25.b"] = pipeline.retrieval.sparse_encoder.state.b
     retrieval_report = evaluate_retrieval(

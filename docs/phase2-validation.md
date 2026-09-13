@@ -7,7 +7,7 @@ MLflow-judge, or RAGAS-judge calls.
 ## Corpus and experiment
 
 - Run date: 2026-09-13
-- MLflow run ID: `c70e7a55613042868f44a4f0ae0d69f3`
+- MLflow run ID: `2f4486ba0fb04bcc8d72e464ad0907b3`
 - Seed set: `consumer-finance-seed-evaluation` version `1.0`
 - Review status: all 36 cases remain `review_required`
 - Acquired: 336 official CFPB Ask CFPB pages from the committed manifest
@@ -17,6 +17,8 @@ MLflow-judge, or RAGAS-judge calls.
 - Categories: mortgages 136, credit cards 56, credit reporting 47, payments/fraud 42, debt
   collection 30, bank accounts 29
 - Models: `Qwen/Qwen3-Embedding-0.6B` and `Qwen/Qwen3-Reranker-0.6B`, CPU
+- Qdrant collection: `consumer_finance_evaluation` (the six-chunk fixture remains isolated in
+  `consumer_finance_phase1`)
 - Candidate depths: dense 20, sparse 20, fused 12, final contexts 5
 - RRF K: 60; BM25 k1/b: 1.2/0.75; HNSW M/ef_construct: 16/100
 
@@ -47,8 +49,13 @@ contains five results, so K=5 is its meaningful final-context comparison.
 - Mortgages were weakest after reranking: Recall@5 0.666667, MRR@5 0.583333, NDCG@5 0.605155.
   Credit reporting was next weakest at Recall@5 0.833333.
 - No case was completely absent from the union of the dense-20 and sparse-20 candidate sets.
+- Candidate-union coverage was dense-only 6, sparse-only 1, both 29, neither 0. BM25 uniquely
+  recovered `reports-005` even though its standalone aggregate scores were lower.
 - Relevant fixture chunks were absent from both the fused top-12 and final reranked top-5 for
   `reports-005`, `mortgages-001`, and `mortgages-006`.
+- Equal-weight RRF with K=60 compressed rank differences: candidates occurring in both lists
+  outranked these one-list hits. Their full-union RRF ranks were respectively 19, 13, and 30, so
+  the fused top-12 truncation removed them before reranking.
 
 These 36 cases remain seed cases whose relevance is concentrated on known fixture chunks. Future
 human review should add judgments across the larger real corpus; no qrels were fabricated for this
@@ -63,3 +70,7 @@ succeeded. The first 1,556-chunk CPU indexing pass took approximately 83 minutes
 environment; this is indexing setup time, not query latency. `scripts/warm_models.py` isolates
 model readiness, ingestion reports completed embedding batches, and retrieval evaluation reports
 each case while preserving the production retrieval path.
+
+Measured CPU wall times were approximately 325.6 seconds for a five-case smoke evaluation and
+2,442.3 seconds (40 minutes 42.3 seconds) for the corrected 36-case run. Model loading and warm-up
+occurred once per process; provider instances were reused for all cases.

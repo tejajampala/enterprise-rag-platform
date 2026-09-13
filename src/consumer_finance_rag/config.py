@@ -92,6 +92,8 @@ class EvaluationSettings(BaseModel):
     dataset_path: Path = Path("data/evaluation/seed_cases.json")
     dataset_name: str = "consumer-finance-seed-evaluation"
     dataset_version: str = "1.0"
+    qdrant_collection_name: str = "consumer_finance_evaluation"
+    bm25_state_path: Path = Path("data/index/evaluation_bm25_state.json")
     k_values: list[int] = Field(default_factory=lambda: [1, 3, 5, 10], min_length=1)
 
     @model_validator(mode="after")

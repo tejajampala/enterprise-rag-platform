@@ -61,6 +61,8 @@ evaluation:
   dataset_path: data/evaluation/seed_cases.json
   dataset_name: consumer-finance-seed-evaluation
   dataset_version: "1.0"
+  qdrant_collection_name: consumer_finance_evaluation
+  bm25_state_path: data/index/evaluation_bm25_state.json
   k_values: [1, 3, 5, 10]
 
 corpus_expansion:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 import re
@@ -32,6 +33,7 @@ class BM25State(BaseModel):
     document_frequencies: dict[str, int]
     document_count: int = Field(gt=0)
     average_document_length: float = Field(gt=0)
+    corpus_hash: str = Field(min_length=64, max_length=64)
     k1: float = 1.2
     b: float = 0.75
 
@@ -60,6 +62,7 @@ class BM25SparseEncoder:
             document_frequencies=frequencies,
             document_count=len(tokenized),
             average_document_length=max(average_length, 1.0),
+            corpus_hash=bm25_corpus_hash(texts),
             k1=k1,
             b=b,
         )
@@ -103,3 +106,14 @@ class BM25SparseEncoder:
     def load(cls, path: str | Path) -> BM25SparseEncoder:
         data = json.loads(Path(path).read_text(encoding="utf-8"))
         return cls(BM25State.model_validate(data))
+
+
+def bm25_corpus_hash(texts: Sequence[str]) -> str:
+    """Hash an ordered text corpus with length framing to prevent concatenation ambiguity."""
+
+    digest = hashlib.sha256()
+    for text in texts:
+        encoded = text.encode("utf-8")
+        digest.update(len(encoded).to_bytes(8, byteorder="big"))
+        digest.update(encoded)
+    return digest.hexdigest()

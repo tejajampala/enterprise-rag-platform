@@ -23,6 +23,13 @@ to isolate Hugging Face embeddings/reranking and Bedrock generation.
 Qdrant is the only retrieval database. PostgreSQL is introduced only as MLflow's backend store;
 there is no Phase 3 application-lineage schema.
 
+Fixture and evaluation indexes are deliberately distinct. `scripts/ingest.py --mode fixture`
+writes `consumer_finance_phase1` plus `data/index/bm25_state.json`.
+`scripts/ingest.py --mode evaluation` requires downloaded records and writes
+`consumer_finance_evaluation` plus `data/index/evaluation_bm25_state.json`. The BM25 state includes
+an ordered corpus hash. Evaluation startup compares that hash and document count with the assembled
+chunks, then compares every live Qdrant `chunk_id`/`chunk_hash` payload with the same snapshot.
+
 ## Tracing design
 
 `observability.py` is a small adapter around current manual MLflow spans. When disabled it returns
@@ -119,9 +126,11 @@ The six-document fixture is stable, fast, and offline. `corpus_expansion.py` sep
 the versioned CFPB sitemap manifest, filters official Ask CFPB URLs using topic rules, enforces a
 hard count, caches raw pages, extracts main content, and emits `SourceRecord` values. Normalization
 and indexing remain downstream. `corpus.py` assembles the fixture first, removes acquired records
-with duplicate source URLs, and then normalizes/chunks the combined corpus. Downloaded data is
+with duplicate source URLs in deterministic acquisition order, and then normalizes/chunks the
+combined corpus. Downloaded data is
 ignored by Git and network acquisition never runs in unit tests. The retrieval evaluator validates
-qrels against this same assembled snapshot and records its document, chunk, and category counts.
+qrels against this same assembled snapshot, verifies its dedicated persisted index, and records its
+mode, document, chunk, and category counts.
 
 Hugging Face providers retain their model object after lazy initialization. One evaluation process
 constructs one retrieval service, explicitly warms its embedding and reranker once through the

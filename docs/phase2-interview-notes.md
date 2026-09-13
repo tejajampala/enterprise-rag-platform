@@ -32,6 +32,14 @@ The retrieval CLI evaluates all six metrics independently for dense HNSW/ANN, sp
 and reranked outputs from `HybridRetrievalService.retrieve_debug()`. This isolates where a change
 helped or hurt instead of attributing everything to “hybrid search.”
 
+The implementation removes duplicate retrieved chunk IDs before applying K. Precision@K always
+uses K as its denominator, even when a stage returns fewer than K unique results. Average
+Precision@K uses `min(number of relevant chunks, K)` as its denominator. Empty relevance sets
+score zero, and K values larger than the returned list evaluate the available ranks while retaining
+the Precision@K denominator convention. NDCG builds its ideal ordering by sorting the known graded
+relevance values in descending order. These are deliberate conventions; other benchmark suites may
+treat duplicate slots or short result lists differently.
+
 ## Generation quality
 
 **LLM-as-a-Judge** uses a configured model to grade an answer against inputs, expected facts, or

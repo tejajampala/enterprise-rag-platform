@@ -11,6 +11,8 @@ from consumer_finance_rag.chunking import ParagraphChunker
 from consumer_finance_rag.config import AppSettings
 from consumer_finance_rag.models import Chunk, Document
 from consumer_finance_rag.normalization import normalize_records
+from consumer_finance_rag.sparse import BM25SparseEncoder, bm25_corpus_hash
+from consumer_finance_rag.vector_store import QdrantHybridStore
 
 DEFAULT_FIXTURE_PATH = Path("data/fixtures/cfpb_consumer_finance.json")
 
@@ -24,6 +26,10 @@ class CorpusSnapshot:
     fixture_document_count: int
     expanded_document_count: int
     category_distribution: dict[str, int]
+
+
+class CorpusIndexValidationError(ValueError):
+    """Raised when persisted BM25/Qdrant state does not match an assembled corpus."""
 
 
 def _record_key(record: SourceRecord) -> str:
@@ -71,3 +77,55 @@ def load_corpus_snapshot(
         expanded_document_count=expanded_count,
         category_distribution=distribution,
     )
+
+
+def evaluation_runtime_settings(settings: AppSettings) -> AppSettings:
+    """Select the dedicated expanded-corpus collection without changing production defaults."""
+
+    qdrant = settings.qdrant.model_copy(
+        update={"collection_name": settings.evaluation.qdrant_collection_name}
+    )
+    return settings.model_copy(update={"qdrant": qdrant})
+
+
+def validate_indexed_corpus(
+    snapshot: CorpusSnapshot,
+    *,
+    sparse_encoder: BM25SparseEncoder,
+    store: QdrantHybridStore,
+) -> None:
+    """Prove that loaded BM25 state and live Qdrant payloads match the evaluation corpus."""
+
+    texts = [chunk.text for chunk in snapshot.chunks]
+    expected = {chunk.chunk_id: chunk.chunk_hash for chunk in snapshot.chunks}
+    issues: list[str] = []
+    if sparse_encoder.state.document_count != len(snapshot.chunks):
+        issues.append(
+            "BM25 document count "
+            f"{sparse_encoder.state.document_count} != corpus chunk count {len(snapshot.chunks)}"
+        )
+    expected_bm25_hash = bm25_corpus_hash(texts)
+    if sparse_encoder.state.corpus_hash != expected_bm25_hash:
+        issues.append("BM25 corpus hash does not match the assembled evaluation corpus")
+
+    actual = store.indexed_chunk_hashes()
+    missing = sorted(set(expected) - set(actual))
+    unexpected = sorted(set(actual) - set(expected))
+    mismatched = sorted(
+        chunk_id
+        for chunk_id in set(expected) & set(actual)
+        if expected[chunk_id] != actual[chunk_id]
+    )
+    if missing:
+        issues.append(f"Qdrant is missing {len(missing)} expected chunks")
+    if unexpected:
+        issues.append(f"Qdrant contains {len(unexpected)} unexpected chunks")
+    if mismatched:
+        issues.append(f"Qdrant contains {len(mismatched)} chunk-hash mismatches")
+    if issues:
+        detail = "\n- ".join(issues)
+        raise CorpusIndexValidationError(
+            "Evaluation index is incompatible; run "
+            "`uv run python scripts/ingest.py --mode evaluation`:\n- "
+            f"{detail}"
+        )

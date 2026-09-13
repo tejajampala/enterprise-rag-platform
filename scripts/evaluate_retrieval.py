@@ -8,7 +8,12 @@ from pathlib import Path
 
 from consumer_finance_rag import __version__
 from consumer_finance_rag.config import AppSettings, load_settings
-from consumer_finance_rag.corpus import CorpusSnapshot, load_corpus_snapshot
+from consumer_finance_rag.corpus import (
+    CorpusSnapshot,
+    evaluation_runtime_settings,
+    load_corpus_snapshot,
+    validate_indexed_corpus,
+)
 from consumer_finance_rag.evaluation.dataset import load_evaluation_set, validate_evaluation_set
 from consumer_finance_rag.evaluation.models import EvaluationCase
 from consumer_finance_rag.evaluation.reporting import write_retrieval_report
@@ -21,6 +26,7 @@ from consumer_finance_rag.evaluation.tracking import (
 )
 from consumer_finance_rag.factory import build_retrieval_service, warm_up_retrieval_service
 from consumer_finance_rag.observability import NoOpTracer
+from consumer_finance_rag.vector_store import QdrantHybridStore
 
 
 def _positive_int(value: str) -> int:
@@ -86,6 +92,7 @@ def _parameters(
     settings: AppSettings,
     dataset_name: str,
     dataset_version: str,
+    dataset_status: str,
     corpus: CorpusSnapshot,
 ) -> dict[str, str | int | float | bool | None]:
     return {
@@ -103,6 +110,8 @@ def _parameters(
         "qdrant.hnsw_ef_construct": settings.qdrant.hnsw_ef_construct,
         "evaluation.dataset_name": dataset_name,
         "evaluation.dataset_version": dataset_version,
+        "evaluation.dataset_status": dataset_status,
+        "corpus.mode": "evaluation",
         "corpus.document_count": len(corpus.documents),
         "corpus.chunk_count": len(corpus.chunks),
         "corpus.fixture_document_count": corpus.fixture_document_count,
@@ -114,7 +123,7 @@ def _parameters(
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    settings = _with_overrides(load_settings(args.config), args)
+    settings = evaluation_runtime_settings(_with_overrides(load_settings(args.config), args))
     dataset_path = args.dataset or settings.evaluation.dataset_path
     dataset = load_evaluation_set(dataset_path)
     if args.max_cases is not None:
@@ -130,9 +139,18 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     print(f"Category distribution: {corpus.category_distribution}", flush=True)
 
-    service = build_retrieval_service(settings, tracer=NoOpTracer())
+    service = build_retrieval_service(
+        settings,
+        bm25_state_path=settings.evaluation.bm25_state_path,
+        tracer=NoOpTracer(),
+    )
+    validate_indexed_corpus(
+        corpus,
+        sparse_encoder=service.sparse_encoder,
+        store=QdrantHybridStore(settings.qdrant),
+    )
     warm_up_retrieval_service(service, progress=lambda message: print(message, flush=True))
-    parameters = _parameters(settings, dataset.name, dataset.version, corpus)
+    parameters = _parameters(settings, dataset.name, dataset.version, dataset.status, corpus)
     parameters["bm25.k1"] = service.sparse_encoder.state.k1
     parameters["bm25.b"] = service.sparse_encoder.state.b
     for category, count in corpus.category_distribution.items():

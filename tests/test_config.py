@@ -44,3 +44,5 @@ def test_configuration_loads_yaml_and_standard_environment_aliases(
     assert settings.aws.tcp_keepalive is True
     assert settings.retrieval.dense_candidates == 9
     assert settings.qdrant.collection_name == "environment-collection"
+    assert settings.evaluation.qdrant_collection_name == "consumer_finance_evaluation"
+    assert settings.evaluation.bm25_state_path == Path("data/index/evaluation_bm25_state.json")

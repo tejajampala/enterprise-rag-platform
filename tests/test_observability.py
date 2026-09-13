@@ -37,6 +37,8 @@ class RecordingTracer:
     def __init__(self) -> None:
         self.names: list[str] = []
         self.records: list[tuple[str, str, Any]] = []
+        self.stack: list[str] = []
+        self.parents: list[tuple[str, str | None]] = []
 
     @contextmanager
     def span(
@@ -48,7 +50,12 @@ class RecordingTracer:
     ) -> Iterator[TraceSpan]:
         del span_type, attributes
         self.names.append(name)
-        yield RecordingSpan(name, self.records)
+        self.parents.append((name, self.stack[-1] if self.stack else None))
+        self.stack.append(name)
+        try:
+            yield RecordingSpan(name, self.records)
+        finally:
+            self.stack.pop()
 
 
 class FakeEmbedding:
@@ -134,6 +141,16 @@ def test_tracing_preserves_output_and_has_expected_hierarchy(
         "rerank",
         "context_build",
         "bedrock_generation",
+    ]
+    assert tracer.parents == [
+        ("rag_request", None),
+        ("embed_query", "rag_request"),
+        ("dense_hnsw_search", "rag_request"),
+        ("sparse_bm25_search", "rag_request"),
+        ("rrf_fusion", "rag_request"),
+        ("rerank", "rag_request"),
+        ("context_build", "rag_request"),
+        ("bedrock_generation", "rag_request"),
     ]
 
 

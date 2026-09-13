@@ -4,7 +4,7 @@ import math
 
 import pytest
 
-from consumer_finance_rag.sparse import BM25SparseEncoder, tokenize
+from consumer_finance_rag.sparse import BM25SparseEncoder, bm25_corpus_hash, tokenize
 
 
 def test_bm25_state_uses_deterministic_vocabulary_document_frequency_and_token_lengths() -> None:
@@ -16,7 +16,13 @@ def test_bm25_state_uses_deterministic_vocabulary_document_frequency_and_token_l
     assert encoder.state.document_frequencies == {"alpha": 1, "beta": 2, "gamma": 1}
     assert encoder.state.document_count == 2
     assert encoder.state.average_document_length == 3.5
+    assert encoder.state.corpus_hash == bm25_corpus_hash(texts)
     assert tokenize(texts[0]) == ["alpha", "alpha", "beta"]
+
+
+def test_bm25_corpus_hash_is_ordered_and_length_framed() -> None:
+    assert bm25_corpus_hash(["ab", "c"]) != bm25_corpus_hash(["a", "bc"])
+    assert bm25_corpus_hash(["first", "second"]) != bm25_corpus_hash(["second", "first"])
 
 
 def test_bm25_document_and_query_use_separate_weights_with_shared_tokenization() -> None:

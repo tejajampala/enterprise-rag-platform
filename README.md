@@ -47,8 +47,9 @@ comparing every vector. HNSW construction and query settings remain visible in c
 `vector_store.py`.
 
 BM25 rewards matching terms while accounting for corpus rarity, term-frequency saturation, and
-document length. Ingestion fits deterministic BM25 statistics, stores sparse vectors in Qdrant,
-and saves the query encoder state at `data/index/bm25_state.json`.
+document length. Ingestion fits deterministic BM25 statistics and stores sparse vectors in
+Qdrant. Fixture mode uses `data/index/bm25_state.json`; evaluation mode uses the isolated,
+corpus-hashed `data/index/evaluation_bm25_state.json`.
 
 Reciprocal Rank Fusion (RRF) combines dense and lexical rankings without comparing incompatible
 raw scores. Each occurrence contributes `1 / (rrf_k + rank)`; candidates are deduplicated by
@@ -126,7 +127,7 @@ Then run:
 ```bash
 uv sync
 docker compose up -d
-uv run python scripts/ingest.py
+uv run python scripts/ingest.py --mode fixture
 uv run streamlit run app/streamlit_app.py
 ```
 
@@ -149,13 +150,16 @@ scores, ranks, source metadata, and previews.
 ### Validate and evaluate retrieval
 
 ```bash
+uv run python scripts/fetch_evaluation_corpus.py
+uv run python scripts/ingest.py --mode evaluation
 uv run python scripts/validate_evaluation_dataset.py
 uv run python scripts/evaluate_retrieval.py --max-cases 5 --no-mlflow
 uv run python scripts/evaluate_retrieval.py --k 1,3,5,10
 ```
 
-The first command confirms that all qrels match the selected normalized documents/chunks. The
-second is a smoke run over five cases and the third evaluates the complete seed set. Both are
+The validator confirms that all qrels match the assembled corpus, the dedicated BM25 state was
+fitted from exactly those chunks, and live Qdrant chunk IDs/hashes match the same snapshot. The
+smoke command evaluates five cases and the final command evaluates the complete seed set. Both are
 deterministic and offline apart from locally running Qdrant/model caches. The MLflow-enabled run
 records corpus counts, model/index/retrieval parameters, stage metrics, category/difficulty
 breakdowns, and JSON/CSV artifacts. CLI overrides such as `--dense-candidates`,
@@ -217,15 +221,16 @@ and a hard document limit. Downloads and parsed output are cached outside Git:
 ```bash
 uv run python scripts/fetch_evaluation_corpus.py
 uv run python scripts/fetch_evaluation_corpus.py --refresh
-uv run python scripts/ingest.py --require-expanded
+uv run python scripts/ingest.py --mode evaluation
 ```
 
 Acquisition is separate from normalization. It is intended to create hundreds of real,
 overlapping documents when CFPB network access is available; it never manufactures duplicates and
 is never called by unit tests. The manifest currently bounds acquisition at 400 pages. Ingestion
 combines distinct downloaded records with the original six fixture documents (fixture URLs take
-precedence), prints document/chunk/category counts, and rebuilds the one existing Qdrant hybrid
-collection. Downloaded pages and parsed corpus JSON remain ignored by Git.
+precedence), prints document/chunk/category counts, and rebuilds the dedicated
+`consumer_finance_evaluation` hybrid collection. Fixture mode remains isolated in
+`consumer_finance_phase1`. Downloaded pages and parsed corpus JSON remain ignored by Git.
 
 ## Development checks
 
