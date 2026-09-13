@@ -1,85 +1,127 @@
 # Consumer Finance Intelligence
 
-Consumer Finance Intelligence is an evidence-grounded retrieval-augmented generation
-(RAG) application over a small public U.S. consumer-finance corpus. Phase 1 provides a
-runnable vertical slice from offline source acquisition through cited AWS Bedrock answers
-and a Streamlit interface.
+Consumer Finance Intelligence is an evidence-grounded RAG application over public U.S.
+consumer-finance information. The plain-Python pipeline retrieves CFPB-derived evidence,
+generates a cited answer through AWS Bedrock, and now records traces and repeatable quality
+experiments in MLflow.
 
-The development corpus covers credit cards, credit reporting, mortgages, bank accounts,
-debt collection, and payments/fraud. It is a clearly labelled local fixture paraphrased
-from linked CFPB consumer-information pages, so tests and ingestion do not require network
-access. This project provides general information, not legal or financial advice.
+The small committed fixture covers credit cards, credit reporting, mortgages, bank accounts,
+debt collection, and payments/fraud. It is paraphrased from the linked CFPB pages and supports
+offline development and tests; it is not legal or financial advice. A separate manifest-driven
+workflow can fetch a larger official CFPB evaluation corpus without committing downloads.
 
-## Phase 1 architecture
+## Phase 2 architecture
 
 ```text
-CFPB-derived fixture
-  -> source acquisition -> normalization -> paragraph-aware chunks
-  -> Hugging Face dense embeddings ----------------------+
-  -> corpus-fitted BM25 sparse vectors ------------------+-> one Qdrant collection
+CFPB fixture / bounded CFPB manifest acquisition
+  -> normalization -> paragraph-aware chunks
+  -> Hugging Face embeddings + BM25 sparse vectors -> one Qdrant collection
 
-question -> Hugging Face query embedding -> Qdrant HNSW/ANN dense search --+
-         -> BM25 query vector -----------> Qdrant sparse search -----------+
-         -> Reciprocal Rank Fusion -> Hugging Face reranker
-         -> bounded citation-aware context -> AWS Bedrock Converse API
-         -> grounded answer + citations -> Streamlit
+question -> Qdrant dense HNSW/ANN search ----+
+         -> Qdrant sparse BM25 search -------+-> RRF -> HF reranker
+         -> citation-aware context -> Bedrock Converse -> grounded answer
+         -> Streamlit
+                  |
+                  +-> MLflow trace (request and stage spans)
+                  +-> deterministic dense/BM25/RRF/reranked metrics
+                  +-> optional MLflow GenAI judges
+                  +-> optional RAGAS 0.4.3 metrics
+                  +-> JSON/CSV regression-ready reports
+
+Docker: Qdrant | PostgreSQL (MLflow backend) | MLflow Tracking Server
 ```
 
-The implementation is plain, typed Python. Provider protocols isolate embeddings,
-reranking, and generation, while `config/config.yaml` and environment variables select
-models. There is no orchestration framework or second retrieval stack.
+Provider protocols keep embeddings, reranking, and generation configurable. Qdrant remains the
+only retrieval engine, Bedrock remains only the generation gateway, MLflow is the observability
+and experiment system, and Streamlit remains presentation. No orchestration framework is used.
 
-### Why embeddings are stored in Qdrant
+### Retrieval foundations
 
-Embeddings turn semantically similar passages and questions into nearby vectors. Storing
-them beside citation payloads in Qdrant lets semantic search return the exact versioned
-chunk, title, category, source URL, and lineage hashes needed to build grounded evidence.
-The same collection also stores BM25 sparse vectors, avoiding synchronization and
-operational complexity across separate search engines.
+Embeddings are stored with citation payloads in Qdrant so semantic search returns the exact
+chunk, title, category, source URL, and hashes needed for grounding. The same collection stores
+the sparse representation, avoiding a duplicate search stack.
 
-### HNSW/ANN dense retrieval
+The named `dense_hnsw` vector uses Hierarchical Navigable Small World (HNSW), an approximate
+nearest-neighbor (ANN) graph. It searches promising graph neighborhoods instead of exhaustively
+comparing every vector. HNSW construction and query settings remain visible in configuration and
+`vector_store.py`.
 
-Qdrant indexes the named `dense_hnsw` vector using Hierarchical Navigable Small World
-(HNSW), an approximate nearest-neighbor (ANN) graph. ANN explores a small, promising
-portion of the graph rather than comparing the query with every vector. The collection's
-HNSW construction values and the search `hnsw_ef` are visible in code/config rather than
-hidden behind a generic retrieval helper.
+BM25 rewards matching terms while accounting for corpus rarity, term-frequency saturation, and
+document length. Ingestion fits deterministic BM25 statistics, stores sparse vectors in Qdrant,
+and saves the query encoder state at `data/index/bm25_state.json`.
 
-### BM25 sparse retrieval
+Reciprocal Rank Fusion (RRF) combines dense and lexical rankings without comparing incompatible
+raw scores. Each occurrence contributes `1 / (rrf_k + rank)`; candidates are deduplicated by
+chunk ID and sorted before reranking. The Hugging Face cross-encoder then evaluates each fused
+question/passage pair and selects the final context.
 
-BM25 is lexical retrieval: it rewards query terms found in a passage, discounts terms
-common across the corpus, saturates repeated occurrences, and normalizes for passage
-length. In Phase 1, ingestion fits deterministic corpus statistics and stores explicit
-BM25-weighted sparse vectors in Qdrant's named sparse index. The saved vocabulary/state at
-`data/index/bm25_state.json` is needed to encode future queries consistently.
+Candidate depths and `rrf_k` are experimental parameters, not claimed optima. Phase 2 measures
+each retrieval stage with Recall@K, Precision@K, Hit Rate@K, MRR@K, NDCG@K, and MAP@K.
 
-### Reciprocal Rank Fusion
+### Bedrock and model separation
 
-Reciprocal Rank Fusion (RRF) combines dense and sparse rankings without treating their
-incompatible raw scores as comparable. Each candidate receives `1 / (k + rank)` from each
-list in which it occurs. Candidates are deduplicated by chunk ID, summed, and sorted before
-reranking.
+`BedrockLLMProvider` uses the vendor-neutral Bedrock Runtime Converse API, standard AWS credential
+resolution, and a configured model ID. It records returned input, output, and total token counts
+on the generation span. MLflow may calculate cost when it recognizes the provider/model; the
+application otherwise reports cost as unavailable and never invents a zero.
 
-### Reranking
+The generation model and evaluation judge are independent. A judge must be explicitly set using
+`MLFLOW_GENAI_JUDGE_DEFAULT_MODEL`; Bedrock uses `bedrock:/<model-id>`. No OpenAI judge fallback is
+allowed by application code.
 
-The configured Hugging Face cross-encoder evaluates the question and each fused candidate
-together. This costs more per passage than retrieval but is applied only to a small fused
-set, improving final ordering before context construction. Candidate depths are defaults,
-not claimed optima; Phase 2 will tune them with labelled queries and MRR, NDCG, and Recall.
+## MLflow observability and evaluation
 
-### AWS Bedrock
+An MLflow **trace** represents one production RAG request. Its nested **spans** represent the
+embedding, dense HNSW search, sparse BM25 search, RRF, reranking, context construction, and
+Bedrock call. Span duration supplies stage latency without a second timing subsystem. Compact IDs,
+ranks, models, retrieval parameters, token usage, stop reason, and AWS request ID are recorded;
+dense vectors and unnecessary full payloads are not.
 
-Bedrock is the inference gateway, not the RAG implementation. `BedrockLLMProvider` uses
-the Bedrock Runtime Converse API, standard AWS credential resolution, and a model ID from
-configuration. Its client has explicit, configurable connect/read timeouts, standard retries,
-and TCP keepalive. The pipeline has no Anthropic-specific or OpenAI-specific request logic.
-The prompt requires evidence-only answers, explicit insufficiency, citation IDs, and
-treating retrieved content as untrusted data rather than instructions.
+An MLflow **run** represents an evaluation experiment. It records model/config parameters,
+aggregate metrics, Git SHA, and report artifacts. Traces explain individual executions; runs make
+whole experiments comparable. PostgreSQL is the MLflow backend because MLflow Evaluation
+Datasets require a database-backed tracking server. It is not the application's document-lineage
+database; that remains Phase 3.
+
+Deterministic retrieval evaluation needs no LLM and compares dense, sparse/BM25, RRF fused, and
+reranked output from the existing `retrieve_debug()` path. Generation evaluation is separate and
+can use references/evidence with optional LLM judges:
+
+- MLflow GenAI: `Correctness`, `RelevanceToQuery`, `Safety`, and trace-based
+  `RetrievalGroundedness` when traces are available.
+- RAGAS 0.4.3 collections: `Faithfulness`, `ContextPrecision`, `ContextRecall`, and
+  `ResponseGroundedness`, executed through its experiment API with `MetricResult.value` and
+  `MetricResult.reason` retained.
+
+Groundedness asks whether claims follow from retrieved evidence; correctness asks whether the
+answer matches expected facts. An answer can be grounded in an irrelevant passage yet incorrect
+for the question, so both dimensions matter.
+
+### RAGAS dependency boundary
+
+RAGAS 0.4.3 declares LangChain, LangGraph, and LangSmith packages as mandatory transitive
+dependencies. They are installed by `uv` solely for RAGAS. Application retrieval, generation,
+tracing, orchestration, and UI do not import or use them; RAGAS is isolated in
+`evaluation/ragas_adapter.py` and can be removed without changing `RAGPipeline`. A static unit test
+enforces this core-module boundary. RAGAS 0.4.3 also references a Vertex AI compatibility module
+removed from the resolved LangChain Community release, so the adapter supplies a local sentinel
+for legacy provider detection; evaluation still uses only LiteLLM/Bedrock.
 
 ## Run locally
 
-Prerequisites: Python 3.12, `uv`, Docker with Compose, enough memory/disk for the configured
-Hugging Face models, and (for generation) AWS credentials with access to a Bedrock model.
+Prerequisites are Python 3.12, `uv`, Docker Compose, and enough memory/disk for the configured
+Hugging Face models. Copy `.env.example` to `.env`, replace the local MLflow database password,
+and optionally configure a Bedrock generation model:
+
+```dotenv
+MLFLOW_DB_USER=mlflow
+MLFLOW_DB_PASSWORD=choose-a-local-password
+MLFLOW_DB_NAME=mlflow
+BEDROCK_GENERATION_MODEL=your-enabled-bedrock-model-id
+AWS_REGION=us-east-1
+```
+
+Then run:
 
 ```bash
 uv sync
@@ -88,51 +130,84 @@ uv run python scripts/ingest.py
 uv run streamlit run app/streamlit_app.py
 ```
 
-The first ingestion downloads the configured Hugging Face embedding model. The first query
-downloads the reranker. CPU inference works for development but can be slow; change
-`device` and model names in configuration for another supported environment.
+Open Streamlit at its displayed URL and MLflow at <http://localhost:5000>. Boto3 uses the standard
+AWS credential chain; never commit access keys. If Bedrock is not configured, the UI displays an
+actionable message rather than calling AWS.
 
-For Bedrock, copy `.env.example` to `.env` and set:
+### Debug retrieval
 
-```dotenv
-BEDROCK_GENERATION_MODEL=your-enabled-bedrock-model-id
-AWS_REGION=us-east-1
-```
-
-Do not put AWS access keys in the repository. Boto3 uses its normal credential chain
-(environment, AWS profile, workload identity, or instance/task role). If the model ID is
-unset, the UI displays a setup message instead of attempting an AWS call.
-
-Configuration defaults live in [`config/config.yaml`](config/config.yaml). Deployments can
-use conventional `BEDROCK_GENERATION_MODEL` and `AWS_REGION` variables. Other settings can
-be overridden with Pydantic's nested `RAG__...` names where supported, for example
-`RAG__QDRANT__COLLECTION_NAME`. Bedrock network settings are under `aws` and can be
-overridden with names such as `RAG__AWS__READ_TIMEOUT_SECONDS` and
-`RAG__AWS__TOTAL_MAX_ATTEMPTS`.
-
-### Inspect retrieval from the developer CLI
-
-After Qdrant is running and ingestion has completed, pass a question to the debugging
-CLI. It invokes the same `HybridRetrievalService` used by the application and does not call
-Bedrock:
+The developer CLI calls the production retrieval service but never Bedrock:
 
 ```bash
 uv run python scripts/debug_retrieval.py "How can I dispute a credit report error?"
-```
-
-The output contains four ordered sections: dense HNSW/ANN results, sparse BM25 results,
-the RRF-fused candidate set, and final reranked results. Each row includes its score, chunk
-ID, source title/category, dense and sparse ranks, and a text preview.
-
-To override only the number of final reranked results:
-
-```bash
 uv run python scripts/debug_retrieval.py "What is a Closing Disclosure?" --top-k 3
 ```
 
-Run `uv run python scripts/debug_retrieval.py --help` for configuration and BM25-state
-path options. The first execution may download the configured Hugging Face models. AWS
-credentials and `BEDROCK_GENERATION_MODEL` are not required for this retrieval-only tool.
+It prints dense HNSW/ANN, sparse BM25, RRF-fused, and final reranked sections with chunk IDs,
+scores, ranks, source metadata, and previews.
+
+### Validate and evaluate retrieval
+
+```bash
+uv run python scripts/validate_evaluation_dataset.py
+uv run python scripts/evaluate_retrieval.py --no-mlflow
+uv run python scripts/evaluate_retrieval.py --k 1,3,5,10
+```
+
+The first command confirms that all qrels match the selected normalized documents/chunks. The
+second is fully deterministic and offline apart from the locally running Qdrant/model cache. The
+third records parameters, stage metrics, category/difficulty breakdowns, and JSON/CSV artifacts in
+MLflow. CLI overrides such as `--dense-candidates`, `--sparse-candidates`, `--fused-candidates`,
+`--final-contexts`, and `--rrf-k` affect only that process and never rewrite configuration.
+
+The committed 36-case **seed evaluation set** is marked `review_required`; it is not called a
+production golden dataset. To sync it to MLflow's SQL-backed Evaluation Dataset store:
+
+```bash
+uv run python scripts/sync_evaluation_dataset.py
+```
+
+### Evaluate generated answers safely
+
+Retrieval-only mode makes no Bedrock generation or judge calls:
+
+```bash
+uv run python scripts/evaluate_rag.py --retrieval-only --no-mlflow
+```
+
+Running generation invokes the configured Bedrock model, so use `--limit` for a smoke test:
+
+```bash
+uv run python scripts/evaluate_rag.py --limit 2
+```
+
+LLM judges are never enabled by default. Set an explicitly enabled Bedrock judge, then opt in:
+
+```dotenv
+MLFLOW_GENAI_JUDGE_DEFAULT_MODEL=bedrock:/your-enabled-judge-model-id
+```
+
+```bash
+uv run python scripts/evaluate_rag.py --limit 2 --with-mlflow-judges
+uv run python scripts/evaluate_rag.py --limit 2 --with-ragas
+```
+
+Both commands can incur AWS charges. RAGAS uses LiteLLM only inside its adapter. Normal tests,
+retrieval evaluation, and Streamlit report display do not execute judges.
+
+### Controlled corpus expansion
+
+The source-controlled `data/corpus_manifest.json` selects official CFPB Ask CFPB URLs, categories,
+and a hard document limit. Downloads and parsed output are cached outside Git:
+
+```bash
+uv run python scripts/fetch_evaluation_corpus.py
+uv run python scripts/fetch_evaluation_corpus.py --refresh
+```
+
+Acquisition is separate from normalization. It is intended to create hundreds of real,
+overlapping documents when CFPB network access is available; it never manufactures duplicates and
+is never called by unit tests. The small fixture remains the quick offline corpus.
 
 ## Development checks
 
@@ -143,15 +218,20 @@ uv run pytest
 docker compose config
 ```
 
-Unit tests mock external systems and never require AWS credentials or a running Qdrant.
+Tests mock external systems and require no Qdrant server, MLflow server, internet, AWS credentials,
+or paid calls.
 
-## Phase 2
+## Offline and online evaluation
 
-Phase 2 will add labelled evaluation data and real MLflow 3.16+/RAGAS 0.4+ evaluation and
-tracing. It will measure and tune candidate depths and retrieval/generation quality rather
-than reporting synthetic metrics. PostgreSQL-backed lineage, token/latency tracing, and
-incremental indexing are also intentionally deferred. Authentication, production
-deployment, Supabase, Redis, Kafka, Kubernetes, OpenSearch, and Airflow are outside this
-phase.
+Offline evaluation runs a fixed corpus and reviewable cases before release, making experiments
+repeatable. Production/online evaluation observes real traffic and feedback under privacy and
+operational controls. Phase 2 implements offline experiments and production-path traces but does
+not claim production monitoring, quality gains, or release thresholds.
 
-More implementation detail is in [`docs/architecture.md`](docs/architecture.md).
+Phase 3 correctly retains document lineage/versioning, incremental indexing, ACLs, PII handling,
+application PostgreSQL schema, production deployment, and formal CI regression gates. Kafka,
+Airflow, Kubernetes, Supabase, OpenSearch, and additional orchestration frameworks remain out of
+scope.
+
+See [architecture details](docs/architecture.md) and the
+[Phase 2 interview notes](docs/phase2-interview-notes.md).

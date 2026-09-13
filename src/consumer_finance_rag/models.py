@@ -103,3 +103,4 @@ class RAGResponse(BaseModel):
     retrieved_chunks: list[RetrievedChunk]
     retrieval_metadata: RetrievalMetadata
     model_metadata: ModelMetadata
+    generation_metadata: dict[str, Any] = Field(default_factory=dict)

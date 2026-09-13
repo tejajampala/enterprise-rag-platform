@@ -1,0 +1,10 @@
+.git
+.venv
+.venv-*
+.uv-cache
+.test-tmp
+__pycache__
+*.pyc
+.env
+data/evaluation_corpus
+reports

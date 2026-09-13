@@ -47,3 +47,24 @@ retrieval:
 
 context:
   max_characters: 12000
+
+mlflow:
+  enabled: true
+  tracking_uri: http://localhost:5000
+  experiment_name: consumer-finance-rag
+  evaluation_experiment_name: consumer-finance-rag-evaluation
+  evaluation_dataset_name: consumer-finance-seed-evaluation-v1
+  judge_model: null
+  report_directory: reports/evaluation
+
+evaluation:
+  dataset_path: data/evaluation/seed_cases.json
+  dataset_name: consumer-finance-seed-evaluation
+  dataset_version: "1.0"
+  k_values: [1, 3, 5, 10]
+
+corpus_expansion:
+  manifest_path: data/corpus_manifest.json
+  cache_directory: data/evaluation_corpus/cache
+  output_path: data/evaluation_corpus/cfpb_evaluation_corpus.json
+  request_timeout_seconds: 30

@@ -1,0 +1,21 @@
+{
+  "name": "cfpb-consumer-information-evaluation-corpus",
+  "version": "2026-09-manifest-v1",
+  "sources": [
+    {
+      "source_id": "cfpb",
+      "sitemap_url": "https://www.consumerfinance.gov/sitemap.xml",
+      "allowed_url_prefix": "https://www.consumerfinance.gov/ask-cfpb/",
+      "source_version": "live-fetch-2026-09-manifest-v1",
+      "max_documents": 750,
+      "category_rules": [
+        {"category": "credit cards", "keywords": ["credit-card", "card-balance", "annual-percentage-rate"]},
+        {"category": "credit reporting", "keywords": ["credit-report", "credit-score", "credit-bureau"]},
+        {"category": "mortgages", "keywords": ["mortgage", "home-loan", "closing-disclosure", "loan-estimate"]},
+        {"category": "bank accounts", "keywords": ["bank-account", "checking-account", "overdraft", "deposit-account"]},
+        {"category": "debt collection", "keywords": ["debt-collector", "debt-collection", "validation-notice"]},
+        {"category": "payments/fraud", "keywords": ["fraud", "scam", "payment", "money-transfer", "identity-theft"]}
+      ]
+    }
+  ]
+}

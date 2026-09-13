@@ -8,6 +8,7 @@ from typing import Protocol
 
 from consumer_finance_rag.config import RetrievalSettings
 from consumer_finance_rag.models import RetrievalMetadata, RetrievedChunk
+from consumer_finance_rag.observability import NoOpTracer, Tracer, chunk_summaries
 from consumer_finance_rag.providers import EmbeddingProvider, RerankerProvider
 from consumer_finance_rag.sparse import BM25SparseEncoder
 
@@ -81,12 +82,16 @@ class HybridRetrievalService:
         store: HybridSearchStore,
         sparse_encoder: BM25SparseEncoder,
         settings: RetrievalSettings,
+        tracer: Tracer | None = None,
+        collection_name: str | None = None,
     ) -> None:
         self.embedding_provider = embedding_provider
         self.reranker = reranker
         self.store = store
         self.sparse_encoder = sparse_encoder
         self.settings = settings
+        self.tracer = tracer or NoOpTracer()
+        self.collection_name = collection_name
 
     def retrieve(self, query: str, top_k: int | None = None) -> RetrievalResult:
         trace = self.retrieve_debug(query, top_k=top_k)
@@ -98,15 +103,77 @@ class HybridRetrievalService:
         final_contexts = self.settings.final_contexts if top_k is None else top_k
         if final_contexts <= 0:
             raise ValueError("top_k must be positive")
-        query_vector = self.embedding_provider.embed_query(query)
-        dense = self.store.search_dense(query_vector, self.settings.dense_candidates)
-        sparse = self.store.search_sparse(
-            query, self.sparse_encoder, self.settings.sparse_candidates
-        )
-        fused = reciprocal_rank_fusion([dense, sparse], rrf_k=self.settings.rrf_k)
+        with self.tracer.span(
+            "embed_query",
+            span_type="EMBEDDING",
+            attributes={"embedding.model": self.embedding_provider.model_name},
+        ) as span:
+            span.set_inputs({"query": query})
+            query_vector = self.embedding_provider.embed_query(query)
+            span.set_outputs({"dimensions": len(query_vector)})
+
+        with self.tracer.span(
+            "dense_hnsw_search",
+            span_type="RETRIEVER",
+            attributes={
+                "retrieval.mode": "dense_hnsw_ann",
+                "qdrant.collection": self.collection_name,
+                "candidate_limit": self.settings.dense_candidates,
+            },
+        ) as span:
+            span.set_inputs({"query": query})
+            dense = self.store.search_dense(query_vector, self.settings.dense_candidates)
+            span.set_outputs(chunk_summaries(dense))
+
+        with self.tracer.span(
+            "sparse_bm25_search",
+            span_type="RETRIEVER",
+            attributes={
+                "retrieval.mode": "sparse_bm25",
+                "qdrant.collection": self.collection_name,
+                "candidate_limit": self.settings.sparse_candidates,
+                "bm25.k1": self.sparse_encoder.state.k1,
+                "bm25.b": self.sparse_encoder.state.b,
+            },
+        ) as span:
+            span.set_inputs({"query": query})
+            sparse = self.store.search_sparse(
+                query, self.sparse_encoder, self.settings.sparse_candidates
+            )
+            span.set_outputs(chunk_summaries(sparse))
+
+        with self.tracer.span(
+            "rrf_fusion",
+            span_type="CHAIN",
+            attributes={
+                "retrieval.mode": "reciprocal_rank_fusion",
+                "rrf.k": self.settings.rrf_k,
+            },
+        ) as span:
+            span.set_inputs(
+                {
+                    "dense_chunk_ids": [item.chunk.chunk_id for item in dense],
+                    "sparse_chunk_ids": [item.chunk.chunk_id for item in sparse],
+                }
+            )
+            fused = reciprocal_rank_fusion([dense, sparse], rrf_k=self.settings.rrf_k)
+            span.set_outputs(chunk_summaries(fused[: self.settings.fused_candidates]))
         candidates = fused[: self.settings.fused_candidates]
-        reranked = self.reranker.rerank(query, candidates, final_contexts)
-        final = reranked[:final_contexts]
+        with self.tracer.span(
+            "rerank",
+            span_type="RERANKER",
+            attributes={
+                "reranker.model": self.reranker.model_name,
+                "candidate_count": len(candidates),
+                "final_context_limit": final_contexts,
+            },
+        ) as span:
+            span.set_inputs(
+                {"query": query, "chunk_ids": [item.chunk.chunk_id for item in candidates]}
+            )
+            reranked = self.reranker.rerank(query, candidates, final_contexts)
+            final = reranked[:final_contexts]
+            span.set_outputs(chunk_summaries(final))
         return RetrievalTrace(
             dense=dense,
             sparse=sparse,
