@@ -1,0 +1,49 @@
+models:
+  embedding:
+    provider: huggingface
+    model: Qwen/Qwen3-Embedding-0.6B
+    device: cpu
+    trust_remote_code: true
+    query_prompt_name: query
+  reranker:
+    provider: huggingface
+    model: Qwen/Qwen3-Reranker-0.6B
+    device: cpu
+    trust_remote_code: true
+  generation:
+    provider: bedrock
+    vendor: anthropic
+    model: null
+    max_tokens: 800
+    temperature: 0.1
+    top_p: 0.9
+
+aws:
+  region: us-east-1
+  connect_timeout_seconds: 5
+  read_timeout_seconds: 120
+  retry_mode: standard
+  total_max_attempts: 3
+  tcp_keepalive: true
+
+qdrant:
+  url: http://localhost:6333
+  collection_name: consumer_finance_phase1
+  dense_vector_name: dense_hnsw
+  sparse_vector_name: sparse_bm25
+  hnsw_m: 16
+  hnsw_ef_construct: 100
+
+chunking:
+  chunk_size: 900
+  overlap: 120
+
+retrieval:
+  dense_candidates: 20
+  sparse_candidates: 20
+  fused_candidates: 12
+  final_contexts: 5
+  rrf_k: 60
+
+context:
+  max_characters: 12000

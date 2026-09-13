@@ -1,0 +1,50 @@
+[
+  {
+    "source_id": "cfpb-credit-card-terms",
+    "title": "How to understand special promotional financing offers on credit cards",
+    "source_url": "https://www.consumerfinance.gov/ask-cfpb/how-do-i-understand-special-promotional-financing-offers-on-credit-cards-en-40/",
+    "category": "credit cards",
+    "source_version": "fixture-reviewed-2026-09-08",
+    "text": "Promotional credit card offers can advertise a low or zero interest rate for a limited period. Consumers should identify how long the promotional period lasts, which transactions it covers, and the interest rate that applies when it ends. A balance that remains after the promotional period may begin accruing interest at the regular annual percentage rate.\n\nA deferred-interest offer is different from a true zero-percent offer. With deferred interest, interest can be charged back to the date of purchase if the promotional balance is not paid in full by the deadline. Minimum payments usually are not enough to clear the balance before that deadline. Review the agreement, payment allocation rules, fees, and due dates, and calculate the monthly amount needed to pay the promotional balance on time."
+  },
+  {
+    "source_id": "cfpb-credit-report-errors",
+    "title": "How do I dispute an error on my credit report?",
+    "source_url": "https://www.consumerfinance.gov/ask-cfpb/how-do-i-dispute-an-error-on-my-credit-report-en-314/",
+    "category": "credit reporting",
+    "source_version": "fixture-reviewed-2026-09-08",
+    "text": "Consumers can dispute inaccurate information with both the credit reporting company and the business that supplied the information. A dispute should identify each item believed to be wrong, explain why, and include copies of supporting documents. Keep originals and records of what was sent. Credit reporting companies generally must investigate a dispute and forward relevant information to the furnisher.\n\nAfter an investigation, the credit reporting company must provide the results. If information is found to be inaccurate, incomplete, or unverifiable, it must be corrected or removed. A consumer may ask that a statement of the dispute be included in the file if the investigation does not resolve the disagreement. Suspected identity theft can involve additional steps, including an identity theft report, fraud alert, or security freeze."
+  },
+  {
+    "source_id": "cfpb-mortgage-closing-disclosure",
+    "title": "What is a Closing Disclosure?",
+    "source_url": "https://www.consumerfinance.gov/ask-cfpb/what-is-a-closing-disclosure-en-1983/",
+    "category": "mortgages",
+    "source_version": "fixture-reviewed-2026-09-08",
+    "text": "A Closing Disclosure is a five-page form with final details about a selected mortgage loan. It includes the loan terms, projected monthly payments, and closing costs. For most mortgages, the lender must provide the form at least three business days before closing so the borrower has time to compare final terms with the Loan Estimate and ask questions.\n\nBorrowers should compare the interest rate, loan amount, monthly principal and interest, prepayment penalty, balloon payment, estimated cash to close, and itemized closing costs. Some changes can trigger a new three-business-day review period, including an inaccurate annual percentage rate beyond permitted tolerances, a change in loan product, or adding a prepayment penalty."
+  },
+  {
+    "source_id": "cfpb-bank-account-overdraft",
+    "title": "Understanding overdraft fees and checking-account choices",
+    "source_url": "https://www.consumerfinance.gov/ask-cfpb/what-is-an-overdraft-fee-en-1033/",
+    "category": "bank accounts",
+    "source_version": "fixture-reviewed-2026-09-08",
+    "text": "An overdraft occurs when an account does not have enough money to cover a transaction but the bank or credit union pays it anyway. The institution may charge a fee. For one-time debit card and ATM transactions, an institution generally cannot charge an overdraft fee unless the consumer affirmatively opted in to overdraft coverage. Declining coverage may cause a transaction to be declined instead.\n\nInstitutions may offer alternatives such as linking a savings account, a line of credit, low-balance alerts, or an account designed not to permit overdrafts. Policies and fees vary. Consumers can review account disclosures, monitor balances, account for pending transactions and holds, and ask how deposits and withdrawals are ordered."
+  },
+  {
+    "source_id": "cfpb-debt-validation",
+    "title": "What information does a debt collector have to give me about a debt?",
+    "source_url": "https://www.consumerfinance.gov/ask-cfpb/what-information-does-a-debt-collector-have-to-give-me-about-a-debt-en-331/",
+    "category": "debt collection",
+    "source_version": "fixture-reviewed-2026-09-08",
+    "text": "A debt collector generally must provide validation information during the initial communication or within five days. The notice includes information about the debt, the creditor, and consumer protections, including how to dispute the debt. Consumers should review the collector's name and mailing information, the creditor's name, the account information, and the itemization of the current amount.\n\nA consumer generally has 30 days after receiving validation information to dispute the debt in writing. If the consumer timely disputes or requests original-creditor information, collection of the disputed amount generally must pause until the collector responds as required. Consumers should not ignore court papers and should keep copies of letters and records of communications. The validation notice itself is not a court judgment."
+  },
+  {
+    "source_id": "cfpb-payment-fraud",
+    "title": "How to recognize and report payment scams",
+    "source_url": "https://www.consumerfinance.gov/consumer-tools/fraud/",
+    "category": "payments/fraud",
+    "source_version": "fixture-reviewed-2026-09-08",
+    "text": "Scammers may impersonate a bank, government agency, business, or relative and create urgency to pressure someone into sending money or revealing account credentials. Requests to pay by gift card, cryptocurrency, wire transfer, or payment app can be difficult to reverse. Do not rely on caller ID or a link supplied in an unexpected message; contact the organization using a trusted phone number or website.\n\nIf a suspicious payment or transfer has occurred, contact the bank, card issuer, or payment provider promptly and ask whether the transaction can be stopped or reversed. Change compromised credentials and report the incident through appropriate channels. Rights and error-resolution procedures depend on the payment method and circumstances, so preserve messages, receipts, transaction identifiers, and dates."
+  }
+]
