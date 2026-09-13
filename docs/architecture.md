@@ -62,6 +62,11 @@ The repository JSON is authoritative and reviewable. `sync_evaluation_dataset.py
 inputs, expectations, and tags into MLflow's Evaluation Dataset API. This requires the SQL backend
 provided by Docker Compose; unit tests do not contact it.
 
+All 36 cases remain `review_required` seed cases, not a production golden set. Their qrels are
+intentionally anchored to a few stable fixture chunks while the downloaded CFPB documents act as
+real retrieval distractors. Broader qrels across the expanded corpus require human review; neither
+acquisition nor evaluation invents relevance labels.
+
 `evaluation/metrics.py` implements the formulas directly:
 
 - Recall@K: relevant retrieved / all relevant.
@@ -113,8 +118,15 @@ are not committed. Qdrant and MLflow have health checks; MLflow waits for Postgr
 The six-document fixture is stable, fast, and offline. `corpus_expansion.py` separately interprets
 the versioned CFPB sitemap manifest, filters official Ask CFPB URLs using topic rules, enforces a
 hard count, caches raw pages, extracts main content, and emits `SourceRecord` values. Normalization
-and indexing remain downstream. Downloaded data is ignored by Git and network acquisition never
-runs in unit tests.
+and indexing remain downstream. `corpus.py` assembles the fixture first, removes acquired records
+with duplicate source URLs, and then normalizes/chunks the combined corpus. Downloaded data is
+ignored by Git and network acquisition never runs in unit tests. The retrieval evaluator validates
+qrels against this same assembled snapshot and records its document, chunk, and category counts.
+
+Hugging Face providers retain their model object after lazy initialization. One evaluation process
+constructs one retrieval service, explicitly warms its embedding and reranker once through the
+same provider interfaces, and reuses both across all cases. `--max-cases` changes only the selected
+case list; it does not create an evaluator-specific retrieval implementation.
 
 ## Security and deferrals
 

@@ -7,7 +7,7 @@
       "sitemap_url": "https://www.consumerfinance.gov/sitemap.xml",
       "allowed_url_prefix": "https://www.consumerfinance.gov/ask-cfpb/",
       "source_version": "live-fetch-2026-09-manifest-v1",
-      "max_documents": 750,
+      "max_documents": 400,
       "category_rules": [
         {"category": "credit cards", "keywords": ["credit-card", "card-balance", "annual-percentage-rate"]},
         {"category": "credit reporting", "keywords": ["credit-report", "credit-score", "credit-bureau"]},

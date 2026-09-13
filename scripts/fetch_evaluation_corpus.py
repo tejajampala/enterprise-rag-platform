@@ -27,6 +27,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         cache_directory=corpus.cache_directory,
         timeout=corpus.request_timeout_seconds,
         refresh=args.refresh,
+        progress=lambda position, total, url: print(
+            f"Acquiring CFPB document {position}/{total}: {url}", flush=True
+        ),
     )
     output = write_source_records(records, corpus.output_path)
     print(f"Fetched {len(records)} CFPB source documents to {output}.")

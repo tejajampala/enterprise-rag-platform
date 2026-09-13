@@ -7,7 +7,7 @@ import json
 import re
 import urllib.request
 import xml.etree.ElementTree as ET
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from html.parser import HTMLParser
 from pathlib import Path
 from typing import Literal, Protocol
@@ -164,6 +164,7 @@ def acquire_manifest_corpus(
     timeout: float,
     fetcher: ByteFetcher = http_fetch,
     refresh: bool = False,
+    progress: Callable[[int, int, str], None] | None = None,
 ) -> list[SourceRecord]:
     """Fetch bounded official pages; unit tests inject a network-free fetcher."""
 
@@ -203,7 +204,9 @@ def acquire_manifest_corpus(
             if len(selected) >= source.max_documents:
                 break
 
-        for url, category in selected:
+        for position, (url, category) in enumerate(selected, start=1):
+            if progress is not None:
+                progress(position, len(selected), url)
             page = _fetch_cached(
                 url,
                 cache_directory=cache,

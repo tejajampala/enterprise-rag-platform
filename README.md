@@ -150,18 +150,32 @@ scores, ranks, source metadata, and previews.
 
 ```bash
 uv run python scripts/validate_evaluation_dataset.py
-uv run python scripts/evaluate_retrieval.py --no-mlflow
+uv run python scripts/evaluate_retrieval.py --max-cases 5 --no-mlflow
 uv run python scripts/evaluate_retrieval.py --k 1,3,5,10
 ```
 
 The first command confirms that all qrels match the selected normalized documents/chunks. The
-second is fully deterministic and offline apart from the locally running Qdrant/model cache. The
-third records parameters, stage metrics, category/difficulty breakdowns, and JSON/CSV artifacts in
-MLflow. CLI overrides such as `--dense-candidates`, `--sparse-candidates`, `--fused-candidates`,
+second is a smoke run over five cases and the third evaluates the complete seed set. Both are
+deterministic and offline apart from locally running Qdrant/model caches. The MLflow-enabled run
+records corpus counts, model/index/retrieval parameters, stage metrics, category/difficulty
+breakdowns, and JSON/CSV artifacts. CLI overrides such as `--dense-candidates`,
+`--sparse-candidates`, `--fused-candidates`,
 `--final-contexts`, and `--rrf-k` affect only that process and never rewrite configuration.
 
-The committed 36-case **seed evaluation set** is marked `review_required`; it is not called a
-production golden dataset. To sync it to MLflow's SQL-backed Evaluation Dataset store:
+The CLI prints distinct embedding-load and reranker-load phases, warms each configured model once,
+then reports every case as it enters the unchanged `retrieve_debug()` production path. To download
+models and prove one tiny inference separately from evaluation, reuse the same factory with:
+
+```bash
+uv run python scripts/warm_models.py
+```
+
+The committed 36-case **seed evaluation set** is marked `review_required`; it is not a production
+golden dataset. Its current qrels deliberately concentrate on the small set of stable fixture
+chunks so every reference remains reviewable and reproducible after real distractors are added.
+Future human review should expand relevant document/chunk judgments across the larger corpus;
+the acquisition workflow does not fabricate qrels. To sync the seed set to MLflow's SQL-backed
+Evaluation Dataset store:
 
 ```bash
 uv run python scripts/sync_evaluation_dataset.py
@@ -203,11 +217,15 @@ and a hard document limit. Downloads and parsed output are cached outside Git:
 ```bash
 uv run python scripts/fetch_evaluation_corpus.py
 uv run python scripts/fetch_evaluation_corpus.py --refresh
+uv run python scripts/ingest.py --require-expanded
 ```
 
 Acquisition is separate from normalization. It is intended to create hundreds of real,
 overlapping documents when CFPB network access is available; it never manufactures duplicates and
-is never called by unit tests. The small fixture remains the quick offline corpus.
+is never called by unit tests. The manifest currently bounds acquisition at 400 pages. Ingestion
+combines distinct downloaded records with the original six fixture documents (fixture URLs take
+precedence), prints document/chunk/category counts, and rebuilds the one existing Qdrant hybrid
+collection. Downloaded pages and parsed corpus JSON remain ignored by Git.
 
 ## Development checks
 
@@ -234,4 +252,6 @@ Airflow, Kubernetes, Supabase, OpenSearch, and additional orchestration framewor
 scope.
 
 See [architecture details](docs/architecture.md) and the
-[Phase 2 interview notes](docs/phase2-interview-notes.md).
+[Phase 2 interview notes](docs/phase2-interview-notes.md). The first expanded-corpus run and its
+non-significant sanity analysis are recorded in
+[Phase 2 deterministic validation](docs/phase2-validation.md).

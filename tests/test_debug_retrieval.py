@@ -4,6 +4,7 @@ from collections.abc import Callable, Sequence
 
 from consumer_finance_rag.config import RetrievalSettings
 from consumer_finance_rag.debug import format_retrieval_trace
+from consumer_finance_rag.factory import warm_up_retrieval_service
 from consumer_finance_rag.models import RetrievedChunk
 from consumer_finance_rag.retrieval import HybridRetrievalService
 from consumer_finance_rag.sparse import BM25SparseEncoder
@@ -12,19 +13,27 @@ from consumer_finance_rag.sparse import BM25SparseEncoder
 class DebugEmbedding:
     model_name = "debug-embedding"
 
+    def __init__(self) -> None:
+        self.query_calls = 0
+
     def embed_documents(self, texts: Sequence[str]) -> list[list[float]]:
         return [[1.0] for _ in texts]
 
     def embed_query(self, text: str) -> list[float]:
+        self.query_calls += 1
         return [1.0]
 
 
 class DebugReranker:
     model_name = "debug-reranker"
 
+    def __init__(self) -> None:
+        self.calls = 0
+
     def rerank(
         self, query: str, candidates: Sequence[RetrievedChunk], top_k: int
     ) -> list[RetrievedChunk]:
+        self.calls += 1
         return [
             candidate.model_copy(update={"rerank_score": 1.0 / rank})
             for rank, candidate in enumerate(candidates[:top_k], start=1)
@@ -77,3 +86,22 @@ def test_debug_trace_retains_every_production_retrieval_stage(
     assert "RRF-fused candidates" in output
     assert "Final reranked results" in output
     assert "chunk_id=shared" in output
+
+
+def test_warmup_reuses_the_service_providers(make_candidate: Callable[..., RetrievedChunk]) -> None:
+    embedding = DebugEmbedding()
+    reranker = DebugReranker()
+    service = HybridRetrievalService(
+        embedding_provider=embedding,
+        reranker=reranker,
+        store=DebugStore([make_candidate("one")], []),
+        sparse_encoder=BM25SparseEncoder.fit(["consumer finance evidence"]),
+        settings=RetrievalSettings(),
+    )
+    messages: list[str] = []
+
+    warm_up_retrieval_service(service, progress=messages.append)
+
+    assert embedding.query_calls == 1
+    assert reranker.calls == 1
+    assert messages[-1] == "Embedding and reranker warm-up succeeded"

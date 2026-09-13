@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from pathlib import Path
 
 from consumer_finance_rag.bedrock import BedrockLLMProvider
@@ -16,6 +17,8 @@ from consumer_finance_rag.providers import (
 from consumer_finance_rag.retrieval import HybridRetrievalService
 from consumer_finance_rag.sparse import BM25SparseEncoder
 from consumer_finance_rag.vector_store import QdrantHybridStore
+
+WarmupProgress = Callable[[str], None]
 
 
 def build_retrieval_service(
@@ -47,6 +50,26 @@ def build_retrieval_service(
         tracer=active_tracer,
         collection_name=settings.qdrant.collection_name,
     )
+
+
+def warm_up_retrieval_service(
+    service: HybridRetrievalService,
+    *,
+    progress: WarmupProgress | None = None,
+) -> None:
+    """Initialize the service's configured models once through their production interfaces."""
+
+    notify = progress or (lambda message: None)
+    query = "consumer finance model warm-up"
+    notify(f"Loading embedding model once: {service.embedding_provider.model_name}")
+    vector = service.embedding_provider.embed_query(query)
+    notify("Embedding model initialized; loading one candidate from Qdrant")
+    candidates = service.store.search_dense(vector, 1)
+    if not candidates:
+        raise RuntimeError("Model warm-up requires at least one indexed Qdrant chunk")
+    notify(f"Loading reranker model once: {service.reranker.model_name}")
+    service.reranker.rerank(query, candidates, 1)
+    notify("Embedding and reranker warm-up succeeded")
 
 
 def build_pipeline(

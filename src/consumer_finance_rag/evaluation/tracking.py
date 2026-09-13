@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import subprocess
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
@@ -72,6 +73,9 @@ def evaluation_run(
         yield DisabledEvaluationRun()
         return
     try:
+        # MLflow prints an emoji-prefixed run URL at teardown, which fails on the
+        # default Windows CP-1252 console even after the run has been persisted.
+        os.environ.setdefault("MLFLOW_SUPPRESS_PRINTING_URL_TO_STDOUT", "true")
         import mlflow
 
         mlflow.set_tracking_uri(settings.tracking_uri)

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from datetime import UTC, datetime
 from statistics import fmean
 
@@ -90,13 +90,16 @@ def evaluate_retrieval(
     *,
     k_values: Sequence[int],
     parameters: Mapping[str, str | int | float | bool | None],
+    progress: Callable[[int, int, EvaluationCase], None] | None = None,
 ) -> RetrievalEvaluationReport:
     if not k_values or any(k <= 0 for k in k_values):
         raise ValueError("k_values must contain positive integers")
-    results = [
-        evaluate_case(case, service.retrieve_debug(case.question), k_values)
-        for case in dataset.cases
-    ]
+    results: list[RetrievalCaseResult] = []
+    total = len(dataset.cases)
+    for position, case in enumerate(dataset.cases, start=1):
+        if progress is not None:
+            progress(position, total, case)
+        results.append(evaluate_case(case, service.retrieve_debug(case.question), k_values))
     return RetrievalEvaluationReport(
         created_at=datetime.now(UTC).isoformat(),
         dataset_name=dataset.name,

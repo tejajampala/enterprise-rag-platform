@@ -7,10 +7,10 @@ from collections.abc import Sequence
 from pathlib import Path
 
 from consumer_finance_rag import __version__
-from consumer_finance_rag.acquisition import JsonFixtureSource
-from consumer_finance_rag.chunking import ParagraphChunker
 from consumer_finance_rag.config import AppSettings, load_settings
+from consumer_finance_rag.corpus import CorpusSnapshot, load_corpus_snapshot
 from consumer_finance_rag.evaluation.dataset import load_evaluation_set, validate_evaluation_set
+from consumer_finance_rag.evaluation.models import EvaluationCase
 from consumer_finance_rag.evaluation.reporting import write_retrieval_report
 from consumer_finance_rag.evaluation.retrieval_runner import evaluate_retrieval
 from consumer_finance_rag.evaluation.tracking import (
@@ -19,8 +19,7 @@ from consumer_finance_rag.evaluation.tracking import (
     flatten_stage_metrics,
     git_commit_sha,
 )
-from consumer_finance_rag.factory import build_retrieval_service
-from consumer_finance_rag.normalization import normalize_records
+from consumer_finance_rag.factory import build_retrieval_service, warm_up_retrieval_service
 from consumer_finance_rag.observability import NoOpTracer
 
 
@@ -53,6 +52,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--rrf-k", type=_positive_int)
     parser.add_argument("--output-directory", type=Path, default=None)
     parser.add_argument(
+        "--max-cases",
+        type=_positive_int,
+        default=None,
+        help="Evaluate the first N seed cases through the unchanged production path.",
+    )
+    parser.add_argument(
         "--no-mlflow",
         action="store_true",
         help="Run deterministic evaluation without contacting the MLflow server.",
@@ -78,7 +83,10 @@ def _with_overrides(settings: AppSettings, args: argparse.Namespace) -> AppSetti
 
 
 def _parameters(
-    settings: AppSettings, dataset_name: str, dataset_version: str
+    settings: AppSettings,
+    dataset_name: str,
+    dataset_version: str,
+    corpus: CorpusSnapshot,
 ) -> dict[str, str | int | float | bool | None]:
     return {
         "embedding.provider": settings.models.embedding.provider,
@@ -95,6 +103,10 @@ def _parameters(
         "qdrant.hnsw_ef_construct": settings.qdrant.hnsw_ef_construct,
         "evaluation.dataset_name": dataset_name,
         "evaluation.dataset_version": dataset_version,
+        "corpus.document_count": len(corpus.documents),
+        "corpus.chunk_count": len(corpus.chunks),
+        "corpus.fixture_document_count": corpus.fixture_document_count,
+        "corpus.expanded_document_count": corpus.expanded_document_count,
         "git.commit": git_commit_sha(),
         "app.version": __version__,
     }
@@ -105,22 +117,36 @@ def main(argv: Sequence[str] | None = None) -> int:
     settings = _with_overrides(load_settings(args.config), args)
     dataset_path = args.dataset or settings.evaluation.dataset_path
     dataset = load_evaluation_set(dataset_path)
+    if args.max_cases is not None:
+        dataset = dataset.model_copy(update={"cases": dataset.cases[: args.max_cases]})
 
-    source = JsonFixtureSource("data/fixtures/cfpb_consumer_finance.json")
-    documents = normalize_records(source.acquire())
-    chunker = ParagraphChunker(settings.chunking.chunk_size, settings.chunking.overlap)
-    chunks = [chunk for document in documents for chunk in chunker.chunk(document)]
-    validate_evaluation_set(dataset, documents=documents, chunks=chunks)
+    corpus = load_corpus_snapshot(settings, require_expanded=True)
+    validate_evaluation_set(dataset, documents=corpus.documents, chunks=corpus.chunks)
+    print(
+        f"Corpus: {len(corpus.documents)} documents / {len(corpus.chunks)} chunks "
+        f"({corpus.fixture_document_count} fixture, "
+        f"{corpus.expanded_document_count} downloaded).",
+        flush=True,
+    )
+    print(f"Category distribution: {corpus.category_distribution}", flush=True)
 
     service = build_retrieval_service(settings, tracer=NoOpTracer())
-    parameters = _parameters(settings, dataset.name, dataset.version)
+    warm_up_retrieval_service(service, progress=lambda message: print(message, flush=True))
+    parameters = _parameters(settings, dataset.name, dataset.version, corpus)
     parameters["bm25.k1"] = service.sparse_encoder.state.k1
     parameters["bm25.b"] = service.sparse_encoder.state.b
+    for category, count in corpus.category_distribution.items():
+        parameters[f"corpus.category.{category}"] = count
+
+    def show_progress(position: int, total: int, case: EvaluationCase) -> None:
+        print(f"Evaluating case {position}/{total}: {case.case_id}", flush=True)
+
     report = evaluate_retrieval(
         service,
         dataset,
         k_values=args.k or settings.evaluation.k_values,
         parameters=parameters,
+        progress=show_progress,
     )
     output_directory = args.output_directory or settings.mlflow.report_directory
     json_path, csv_path = write_retrieval_report(report, output_directory)
