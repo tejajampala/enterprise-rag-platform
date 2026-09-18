@@ -45,7 +45,28 @@ application PostgreSQL
 ```
 
 `LineageRepository` persists caller-supplied lineage facts and flushes them without committing.
-Change detection, incremental-ingestion decisions, and Qdrant publishing remain unimplemented.
+It does not calculate classifications. Incremental-ingestion orchestration and Qdrant publishing
+remain unimplemented.
+
+Source change planning is a separate pure business-logic boundary:
+
+```text
+authoritative current snapshot + previous persisted state
+                         |
+                         v
+versioned fingerprints + plan_document_changes
+                         |
+                         v
+          NEW / CHANGED / UNCHANGED / DELETED
+                         |
+                         v
+             future persistence/index service
+```
+
+The planner compares normalized content hashes and material metadata fingerprints only. It does
+not mutate PostgreSQL, touch Qdrant, rebuild BM25, or treat embedding/chunking configuration as a
+source-document change. Missing documents are classified as `DELETED` only when the current
+snapshot is explicitly authoritative; otherwise deletion detection is reported as skipped.
 
 Fixture and evaluation indexes are deliberately distinct. `scripts/ingest.py --mode fixture`
 writes `consumer_finance_phase1` plus `data/index/bm25_state.json`.
