@@ -14,7 +14,14 @@ from consumer_finance_rag.chunking import ParagraphChunker
 from consumer_finance_rag.config import DatabaseSettings, load_settings
 from consumer_finance_rag.corpus import CorpusSnapshot
 from consumer_finance_rag.lineage.diff import current_document_state, plan_document_changes
-from consumer_finance_rag.lineage.models import Base, Corpus, IngestionRun
+from consumer_finance_rag.lineage.models import (
+    Base,
+    Corpus,
+    DocumentVersion,
+    IngestionRun,
+    LineageChunk,
+    LineageDocument,
+)
 from consumer_finance_rag.lineage.service import LineageDryRunResult
 from consumer_finance_rag.normalization import normalize_record
 
@@ -99,6 +106,7 @@ def test_summary_and_details_are_deterministic_and_ordered() -> None:
         corpus_initialized=False,
         current_document_count=2,
         previous_active_document_count=0,
+        snapshot_hash="a" * 64,
     )
 
     first = ingest_incremental.format_dry_run_summary(
@@ -195,6 +203,54 @@ def test_cli_first_use_is_read_only_and_creates_no_corpus_or_run(
     with Session(engine) as session:
         assert session.scalar(select(func.count()).select_from(Corpus)) == 0
         assert session.scalar(select(func.count()).select_from(IngestionRun)) == 0
+    engine.dispose()
+
+
+def test_cli_requires_apply_flag_before_mutating_lineage(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    database_path = tmp_path / "lineage.sqlite"
+    database_url = f"sqlite+pysqlite:///{database_path.as_posix()}"
+    engine = create_engine(database_url)
+    Base.metadata.create_all(engine)
+    engine.dispose()
+    settings = load_settings("config/config.yaml").model_copy(
+        update={"database": DatabaseSettings(url=database_url)}
+    )
+    monkeypatch.setattr(ingest_incremental, "load_settings", lambda _path: settings)
+    monkeypatch.setattr(
+        ingest_incremental,
+        "assemble_snapshot",
+        lambda _settings, _mode: snapshot_for("cards"),
+    )
+
+    assert ingest_incremental.main(["--mode", "fixture"]) == 0
+    dry_run_output = capsys.readouterr().out
+    assert "DRY RUN" in dry_run_output
+
+    engine = create_engine(database_url)
+    with Session(engine) as session:
+        assert session.scalar(select(func.count()).select_from(Corpus)) == 0
+        assert session.scalar(select(func.count()).select_from(IngestionRun)) == 0
+    engine.dispose()
+
+    assert ingest_incremental.main(["--mode", "fixture", "--apply"]) == 0
+    apply_output = capsys.readouterr().out
+    assert "Phase 3 managed ingestion APPLY" in apply_output
+    assert "Lineage apply completed." in apply_output
+    assert "Qdrant indexing: NOT RUN" in apply_output
+    assert "BM25 update: NOT RUN" in apply_output
+    assert "Embedding inference: NOT RUN" in apply_output
+
+    engine = create_engine(database_url)
+    with Session(engine) as session:
+        assert session.scalar(select(func.count()).select_from(Corpus)) == 1
+        assert session.scalar(select(func.count()).select_from(IngestionRun)) == 1
+        assert session.scalar(select(func.count()).select_from(LineageDocument)) == 1
+        assert session.scalar(select(func.count()).select_from(DocumentVersion)) == 1
+        assert session.scalar(select(func.count()).select_from(LineageChunk)) == 1
     engine.dispose()
 
 

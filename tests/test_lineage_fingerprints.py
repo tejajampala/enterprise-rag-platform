@@ -1,11 +1,37 @@
 from __future__ import annotations
 
 from consumer_finance_rag.lineage.fingerprints import (
+    ManagedSnapshotFingerprintRecord,
     chunking_fingerprint,
     embedding_fingerprint,
+    managed_snapshot_hash,
     metadata_hash,
     version_hash,
 )
+
+
+def snapshot_record(source_key: str, marker: str) -> ManagedSnapshotFingerprintRecord:
+    return ManagedSnapshotFingerprintRecord(
+        source_key=source_key,
+        content_hash=marker * 64,
+        metadata_hash=marker.upper() * 64,
+        version_hash=("f" if marker != "f" else "e") * 64,
+    )
+
+
+def test_managed_snapshot_hash_is_deterministic_and_order_independent() -> None:
+    first = managed_snapshot_hash([snapshot_record("b", "b"), snapshot_record("a", "a")])
+    second = managed_snapshot_hash([snapshot_record("a", "a"), snapshot_record("b", "b")])
+
+    assert first == second
+    assert len(first) == 64
+
+
+def test_managed_snapshot_hash_changes_with_source_version_identity() -> None:
+    original = managed_snapshot_hash([snapshot_record("a", "a")])
+    changed = managed_snapshot_hash([snapshot_record("a", "b")])
+
+    assert original != changed
 
 
 def metadata_fingerprint(*, title: str = "Credit reports", source_url: str | None = None) -> str:

@@ -42,7 +42,9 @@ database. The `lineage-postgres` Docker service uses its own credentials, databa
 port, and volume; it does not reuse MLflow's PostgreSQL database. Set `RAG__DATABASE__URL` only
 when running Phase 3 database operations. Fixture ingestion, deterministic evaluation, retrieval,
 and normal application startup remain database-independent. The lineage schema, repository,
-pure change planner, and read-only planning CLI are present; applied incremental ingestion is not.
+pure change planner, and first transactional lineage write path are present. This write path records
+source observations and immutable versions only; managed Qdrant indexing and BM25 refresh are not
+yet implemented.
 
 ### Retrieval foundations
 
@@ -144,7 +146,7 @@ Open Streamlit at its displayed URL and MLflow at <http://localhost:5000>. Boto3
 AWS credential chain; never commit access keys. If Bedrock is not configured, the UI displays an
 actionable message rather than calling AWS.
 
-### Phase 3 managed-ingestion dry run
+### Phase 3 managed-ingestion planning and lineage apply
 
 After configuring `RAG__DATABASE__URL` and applying the application migration with
 `uv run alembic upgrade head`, inspect a deterministic plan without writing it:
@@ -154,11 +156,26 @@ uv run python scripts/ingest_incremental.py --mode fixture
 uv run python scripts/ingest_incremental.py --mode evaluation --authoritative-snapshot --details
 ```
 
+Persist exactly that plan to the application lineage database by adding `--apply`:
+
+```bash
+uv run python scripts/ingest_incremental.py --mode fixture --apply
+uv run python scripts/ingest_incremental.py --mode evaluation --authoritative-snapshot --apply
+```
+
 Fixture mode uses only the six stable fixture documents. Evaluation mode requires the existing
 downloaded expanded corpus and combines it with the fixture using the production corpus assembler.
-This CLI is dry-run only: it does not mutate PostgreSQL or Qdrant, rewrite BM25 state, or perform
-embedding/model inference. The authoritative flag is required before absence can be planned as a
-deletion. There is deliberately no `--apply` option yet.
+Without `--apply`, the command remains strictly read-only. With `--apply`, it writes only managed
+corpus registration, ingestion runs, logical documents, immutable document versions/chunks, and
+per-run classifications. The authoritative flag is required before absence can be marked deleted.
+Deleted sources are retained with all history; reappearance is rejected clearly until restoration
+semantics are designed.
+
+An apply creates and commits its `RUNNING` audit row first. All document/version/chunk/classification
+mutations and the final `SUCCEEDED` or `NOOP` transition then share one transaction. If that
+transaction fails, it is rolled back and the run is marked `FAILED` in a separate transaction.
+Concurrent-apply locking is deferred. Neither mode updates Qdrant, embeddings, or BM25, so an apply
+must not be interpreted as a retrieval-index update.
 
 ### Debug retrieval
 
@@ -276,10 +293,11 @@ repeatable. Production/online evaluation observes real traffic and feedback unde
 operational controls. Phase 2 implements offline experiments and production-path traces but does
 not claim production monitoring, quality gains, or release thresholds.
 
-Phase 3 correctly retains document lineage/versioning, incremental indexing, ACLs, PII handling,
-application PostgreSQL schema, production deployment, and formal CI regression gates. Kafka,
-Airflow, Kubernetes, Supabase, OpenSearch, and additional orchestration frameworks remain out of
-scope.
+Phase 3 currently provides the application PostgreSQL schema, deterministic planning, and
+transactional lineage/version persistence. Managed Qdrant/BM25 indexing, restoration, concurrent
+apply locking, ACLs, PII handling, production deployment, and formal CI regression gates remain
+future work. Kafka, Airflow, Kubernetes, Supabase, OpenSearch, and additional orchestration
+frameworks remain out of scope.
 
 See [architecture details](docs/architecture.md) and the
 [Phase 2 interview notes](docs/phase2-interview-notes.md). The first expanded-corpus run and its

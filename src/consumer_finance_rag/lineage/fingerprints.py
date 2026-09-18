@@ -4,18 +4,17 @@ from __future__ import annotations
 
 import hashlib
 import json
-from collections.abc import Mapping
+from collections.abc import Sequence
+from dataclasses import dataclass
 
 DOCUMENT_METADATA_FINGERPRINT_VERSION = "document-metadata-v1"
 DOCUMENT_VERSION_FINGERPRINT_VERSION = "document-version-v1"
 CHUNKING_FINGERPRINT_VERSION = "chunking-v1"
 DEFAULT_CHUNKER_IMPLEMENTATION = "paragraph-aware-recursive-v1"
 EMBEDDING_FINGERPRINT_VERSION = "embedding-index-v1"
+MANAGED_SNAPSHOT_FINGERPRINT_VERSION = "managed-snapshot-v1"
 
-FingerprintValue = str | int | bool | None
-
-
-def _canonical_fingerprint(payload: Mapping[str, FingerprintValue]) -> str:
+def _canonical_fingerprint(payload: object) -> str:
     serialized = json.dumps(
         payload,
         ensure_ascii=False,
@@ -23,6 +22,44 @@ def _canonical_fingerprint(payload: Mapping[str, FingerprintValue]) -> str:
         separators=(",", ":"),
     )
     return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
+
+
+@dataclass(frozen=True, slots=True)
+class ManagedSnapshotFingerprintRecord:
+    """Source/version identity included in a managed snapshot fingerprint."""
+
+    source_key: str
+    content_hash: str
+    metadata_hash: str
+    version_hash: str
+
+
+def managed_snapshot_hash(records: Sequence[ManagedSnapshotFingerprintRecord]) -> str:
+    """Fingerprint an order-independent current managed-corpus snapshot."""
+
+    ordered = sorted(
+        records,
+        key=lambda record: (
+            record.source_key,
+            record.content_hash,
+            record.metadata_hash,
+            record.version_hash,
+        ),
+    )
+    return _canonical_fingerprint(
+        {
+            "documents": [
+                {
+                    "content_hash": record.content_hash,
+                    "metadata_hash": record.metadata_hash,
+                    "source_key": record.source_key,
+                    "version_hash": record.version_hash,
+                }
+                for record in ordered
+            ],
+            "fingerprint_version": MANAGED_SNAPSHOT_FINGERPRINT_VERSION,
+        }
+    )
 
 
 def metadata_hash(

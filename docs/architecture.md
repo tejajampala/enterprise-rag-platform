@@ -25,14 +25,14 @@ application database; it never shares MLflow's database or metadata tables. The 
 schema records managed corpora, ingestion attempts, stable logical documents, immutable document
 versions and chunks, per-run document classifications, and immutable Qdrant index generations with
 their chunk membership. Application UUIDs connect versions across the existing content-derived
-compatibility IDs. This milestone defines persistence only: incremental ingestion, change
-classification, vector reuse, index activation, and automatic registration of the Phase 1 fixture
-or Phase 2 evaluation corpus are not implemented.
+compatibility IDs. This milestone advances lineage persistence only: change classification
+planning and the first transactional lineage write path are implemented. Vector reuse, index
+activation, Qdrant mutation, and BM25 refresh are not implemented.
 
-The repository boundary for future managed-ingestion work is deliberately small:
+The managed-ingestion write boundary is deliberately small:
 
 ```text
-future service / business logic
+LineageApplyService / business logic
         |
         v
 LineageRepository
@@ -45,8 +45,9 @@ application PostgreSQL
 ```
 
 `LineageRepository` persists caller-supplied lineage facts and flushes them without committing.
-It does not calculate classifications. Incremental-ingestion orchestration and Qdrant publishing
-remain unimplemented.
+It does not calculate classifications or commit transactions. `LineageApplyService` consumes the
+existing pure `ChangePlan`; it does not reclassify documents. Qdrant publishing and BM25 lifecycle
+management remain unimplemented.
 
 Source change planning is a separate pure business-logic boundary:
 
@@ -60,7 +61,7 @@ versioned fingerprints + plan_document_changes
           NEW / CHANGED / UNCHANGED / DELETED
                          |
                          v
-             future persistence/index service
+       optional lineage persistence service
 ```
 
 The planner compares normalized content hashes and material metadata fingerprints only. It does
@@ -68,7 +69,7 @@ not mutate PostgreSQL, touch Qdrant, rebuild BM25, or treat embedding/chunking c
 source-document change. Missing documents are classified as `DELETED` only when the current
 snapshot is explicitly authoritative; otherwise deletion detection is reported as skipped.
 
-The first Phase 3 CLI connects the read sides without adding write orchestration:
+The Phase 3 CLI always constructs the same read-side plan:
 
 ```text
 CorpusSnapshot --------------------> CurrentDocumentState ---+
@@ -77,10 +78,30 @@ LineageRepository (read-only) -----> PersistedDocumentState -+-> ChangePlan
 ```
 
 `LineagePlanningService` is the small ORM/domain adapter. `scripts/ingest_incremental.py` selects
-fixture or evaluation corpus assembly, opens a caller-managed session, prints the plan, and exits
-without committing. An absent managed-corpus row is reported as uninitialized and treated as an
-empty previous state; it is never created by the dry run. The configured Qdrant prefix is
-informational at this milestone.
+fixture or evaluation corpus assembly and prints the plan. By default it exits without committing;
+an absent managed-corpus row is reported as uninitialized and remains absent. Explicit `--apply`
+passes that same `ChangePlan` to `LineageApplyService`, which persists corpus/run/document/version/
+chunk/classification state only.
+
+The apply transaction model deliberately preserves a failed-attempt audit record:
+
+```text
+transaction 1: get/create corpus + commit RUNNING ingestion run
+transaction 2: all lineage mutations + SUCCEEDED/NOOP transition
+on failure:   rollback transaction 2, then mark the run FAILED separately
+```
+
+`NEW` creates a logical document, version 1, and its existing compatibility chunks. `CHANGED`
+appends one immutable version and chunks. `UNCHANGED` records observation and advances
+`last_seen_run_id` without redundant history; an all-unchanged plan is `NOOP`. Authoritative
+`DELETED` soft-deletes the logical document without removing history. A deleted source that
+reappears is explicitly unsupported rather than violating the corpus/source uniqueness rule.
+Snapshot hashes use versioned canonical JSON (`managed-snapshot-v1`) over sorted source keys and
+their content/metadata/version hashes. Advisory locking and restoration semantics are deferred.
+
+The configured Qdrant prefix is registration metadata only. Apply never creates `index_states` or
+`index_state_chunks`, calls Qdrant, calculates embeddings, or writes BM25 state. Retrieval therefore
+continues to use the unchanged Phase 1/Phase 2 indexes.
 
 Fixture and evaluation indexes are deliberately distinct. `scripts/ingest.py --mode fixture`
 writes `consumer_finance_phase1` plus `data/index/bm25_state.json`.
@@ -200,5 +221,5 @@ case list; it does not create an evaluator-specific retrieval implementation.
 
 Retrieved content remains untrusted prompt data. Traces avoid secrets and vectors. Boto3 uses
 standard credential resolution. Paid generation and judging require explicit commands/config.
-Authentication, ACLs, PII pipelines, lineage service logic, incremental indexing, production
+Authentication, ACLs, PII pipelines, managed Qdrant/BM25 indexing, production
 deployment, online evaluation, and formal regression gates remain future work.

@@ -1,4 +1,4 @@
-"""Plan Phase 3 managed-ingestion changes without writing any system."""
+"""Plan or persist Phase 3 managed-ingestion lineage without updating retrieval."""
 
 from __future__ import annotations
 
@@ -19,10 +19,12 @@ from consumer_finance_rag.lineage.database import (
 )
 from consumer_finance_rag.lineage.diff import PlannedDocumentChange
 from consumer_finance_rag.lineage.repository import (
-    InvalidLineageStateError,
     LineageRepository,
+    LineageRepositoryError,
 )
 from consumer_finance_rag.lineage.service import (
+    LineageApplyResult,
+    LineageApplyService,
     LineageDryRunResult,
     LineagePlanningService,
 )
@@ -46,6 +48,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--authoritative-snapshot",
         action="store_true",
         help="Allow missing previously ACTIVE documents to be planned as DELETED.",
+    )
+    parser.add_argument(
+        "--apply",
+        action="store_true",
+        help="Persist the displayed plan to PostgreSQL lineage tables only.",
     )
     parser.add_argument(
         "--details",
@@ -73,8 +80,9 @@ def format_dry_run_summary(
     qdrant_collection_prefix: str,
     mode: str,
     details: bool,
+    apply: bool = False,
 ) -> str:
-    """Format deterministic, bounded dry-run output."""
+    """Format the same deterministic plan for dry-run and apply modes."""
 
     plan = result.plan
     corpus_state = (
@@ -88,12 +96,13 @@ def format_dry_run_summary(
         else "SKIPPED (non-authoritative snapshot)"
     )
     lines = [
-        "Phase 3 managed ingestion dry run",
+        f"Phase 3 managed ingestion {'APPLY' if apply else 'DRY RUN'}",
         "",
         f"Corpus key: {corpus_key}",
         f"Managed corpus state: {corpus_state}",
         f"Qdrant collection prefix: {qdrant_collection_prefix} (informational only)",
         f"Snapshot mode: {mode}",
+        f"Snapshot hash: {result.snapshot_hash}",
         f"Documents in current snapshot: {result.current_document_count}",
         f"Previous active documents: {result.previous_active_document_count}",
         f"Authoritative snapshot: {'yes' if plan.authoritative_snapshot else 'no'}",
@@ -110,13 +119,35 @@ def format_dry_run_summary(
         lines.extend(["", "Details", "-------"])
         for item in sorted(plan.items, key=lambda planned: planned.source_key):
             lines.extend(_format_detail(item))
-    lines.extend(
+    lines.extend(["", _plan_footer(apply)])
+    return "\n".join(lines)
+
+
+def _plan_footer(apply: bool) -> str:
+    if apply:
+        return "This plan will now be persisted to PostgreSQL lineage tables only."
+    return "No PostgreSQL, Qdrant, BM25, or model changes were made."
+
+
+def format_apply_result(result: LineageApplyResult) -> str:
+    """Format a bounded account of lineage writes and explicitly omitted index work."""
+
+    return "\n".join(
         [
+            "Lineage apply completed.",
             "",
-            "No PostgreSQL, Qdrant, BM25, or model changes were made.",
+            f"Ingestion run: {result.run_id}",
+            f"Run status: {result.status}",
+            f"NEW persisted: {result.new_count}",
+            f"CHANGED persisted: {result.changed_count}",
+            f"UNCHANGED observed: {result.unchanged_count}",
+            f"DELETED marked: {result.deleted_count}",
+            "",
+            "Qdrant indexing: NOT RUN",
+            "BM25 update: NOT RUN",
+            "Embedding inference: NOT RUN",
         ]
     )
-    return "\n".join(lines)
 
 
 def _format_detail(item: PlannedDocumentChange) -> list[str]:
@@ -141,23 +172,51 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         require_database_url(settings.database)
     except DatabaseConfigurationError as exc:
-        print(f"Phase 3 dry-run configuration error: {exc}", file=sys.stderr)
+        print(f"Phase 3 ingestion configuration error: {exc}", file=sys.stderr)
         return 2
 
     try:
         snapshot = assemble_snapshot(settings, str(args.mode))
     except FileNotFoundError as exc:
-        print(f"Phase 3 dry-run corpus error: {exc}", file=sys.stderr)
+        print(f"Phase 3 ingestion corpus error: {exc}", file=sys.stderr)
         return 2
 
     engine = create_database_engine(settings.database)
     try:
         with Session(engine) as session:
-            result = LineagePlanningService(LineageRepository(session)).plan_snapshot(
-                snapshot,
-                corpus_key=settings.managed_ingestion.corpus_key,
-                authoritative_snapshot=bool(args.authoritative_snapshot),
+            with session.begin():
+                result = LineagePlanningService(LineageRepository(session)).plan_snapshot(
+                    snapshot,
+                    corpus_key=settings.managed_ingestion.corpus_key,
+                    authoritative_snapshot=bool(args.authoritative_snapshot),
+                )
+            print(
+                format_dry_run_summary(
+                    result,
+                    corpus_key=settings.managed_ingestion.corpus_key,
+                    qdrant_collection_prefix=(
+                        settings.managed_ingestion.qdrant_collection_prefix
+                    ),
+                    mode=str(args.mode),
+                    details=bool(args.details),
+                    apply=bool(args.apply),
+                ),
+                flush=True,
             )
+            apply_result = None
+            if args.apply:
+                apply_result = LineageApplyService(
+                    session,
+                    chunk_size=settings.chunking.chunk_size,
+                    overlap=settings.chunking.overlap,
+                ).apply_plan(
+                    result.plan,
+                    corpus_key=settings.managed_ingestion.corpus_key,
+                    qdrant_collection_prefix=(
+                        settings.managed_ingestion.qdrant_collection_prefix
+                    ),
+                    snapshot_hash=result.snapshot_hash,
+                )
     except (OperationalError, ProgrammingError):
         print(
             "Unable to read the Phase 3 application lineage tables. Verify the database "
@@ -165,23 +224,14 @@ def main(argv: Sequence[str] | None = None) -> int:
             file=sys.stderr,
         )
         return 2
-    except InvalidLineageStateError as exc:
+    except LineageRepositoryError as exc:
         print(f"Invalid Phase 3 lineage state: {exc}", file=sys.stderr)
         return 2
     finally:
         engine.dispose()
 
-    print(
-        format_dry_run_summary(
-            result,
-            corpus_key=settings.managed_ingestion.corpus_key,
-            qdrant_collection_prefix=(
-                settings.managed_ingestion.qdrant_collection_prefix
-            ),
-            mode=str(args.mode),
-            details=bool(args.details),
-        )
-    )
+    if apply_result is not None:
+        print("", format_apply_result(apply_result), sep="\n")
     return 0
 
 

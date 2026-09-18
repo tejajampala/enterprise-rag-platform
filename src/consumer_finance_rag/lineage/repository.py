@@ -154,16 +154,36 @@ class LineageRepository:
         return run
 
     def fail_ingestion_run(
-        self, run_id: UUID, error_message: str, completed_at: datetime
+        self,
+        run_id: UUID,
+        error_message: str,
+        completed_at: datetime,
+        *,
+        documents_new: int = 0,
+        documents_changed: int = 0,
+        documents_unchanged: int = 0,
+        documents_deleted: int = 0,
     ) -> IngestionRun:
-        """Finish a RUNNING attempt as FAILED without committing."""
+        """Finish a RUNNING attempt as FAILED with its planned counts."""
 
         run = self._require_ingestion_run(run_id)
         self._require_running(run)
         self._require_aware_timestamp(completed_at)
+        counts = (
+            documents_new,
+            documents_changed,
+            documents_unchanged,
+            documents_deleted,
+        )
+        if any(count < 0 for count in counts):
+            raise InvalidLineageStateError("Ingestion document counts cannot be negative")
         run.status = "FAILED"
         run.error_message = error_message
         run.completed_at = completed_at
+        run.documents_new = documents_new
+        run.documents_changed = documents_changed
+        run.documents_unchanged = documents_unchanged
+        run.documents_deleted = documents_deleted
         self._session.flush()
         return run
 
