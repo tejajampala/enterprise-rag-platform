@@ -46,3 +46,26 @@ def test_configuration_loads_yaml_and_standard_environment_aliases(
     assert settings.qdrant.collection_name == "environment-collection"
     assert settings.evaluation.qdrant_collection_name == "consumer_finance_evaluation"
     assert settings.evaluation.bm25_state_path == Path("data/index/evaluation_bm25_state.json")
+
+
+def test_application_database_is_optional(tmp_path: Path, monkeypatch: MonkeyPatch) -> None:
+    path = tmp_path / "config.yaml"
+    path.write_text(CONFIG, encoding="utf-8")
+    monkeypatch.setenv("RAG__DATABASE__URL", "")
+
+    settings = load_settings(path)
+
+    assert settings.database.url is None
+
+
+def test_application_database_url_uses_nested_environment_override(
+    tmp_path: Path, monkeypatch: MonkeyPatch
+) -> None:
+    path = tmp_path / "config.yaml"
+    path.write_text(f"{CONFIG}\ndatabase: {{url: null}}\n", encoding="utf-8")
+    expected = "postgresql+psycopg://lineage:secret@localhost:5433/lineage"
+    monkeypatch.setenv("RAG__DATABASE__URL", expected)
+
+    settings = load_settings(path)
+
+    assert settings.database.url == expected

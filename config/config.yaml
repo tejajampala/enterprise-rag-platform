@@ -26,6 +26,9 @@ aws:
   total_max_attempts: 3
   tcp_keepalive: true
 
+database:
+  url: null
+
 qdrant:
   url: http://localhost:6333
   collection_name: consumer_finance_phase1

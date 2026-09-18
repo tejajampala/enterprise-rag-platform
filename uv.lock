@@ -393,6 +393,7 @@ name = "consumer-finance-rag"
 version = "0.2.0"
 source = { editable = "." }
 dependencies = [
+    { name = "alembic" },
     { name = "boto3" },
     { name = "botocore", extra = ["crt"] },
     { name = "litellm" },
@@ -405,6 +406,7 @@ dependencies = [
     { name = "qdrant-client" },
     { name = "ragas" },
     { name = "sentence-transformers" },
+    { name = "sqlalchemy" },
     { name = "streamlit" },
     { name = "torchvision" },
 ]
@@ -420,6 +422,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "alembic", specifier = ">=1.16,<2" },
     { name = "boto3", specifier = ">=1.40" },
     { name = "botocore", extras = ["crt"], specifier = ">=1.43.89" },
     { name = "litellm", specifier = ">=1.80" },
@@ -432,6 +435,7 @@ requires-dist = [
     { name = "qdrant-client", specifier = ">=1.15,<2" },
     { name = "ragas", specifier = ">=0.4,<0.5" },
     { name = "sentence-transformers", specifier = ">=6,<7" },
+    { name = "sqlalchemy", specifier = ">=2,<3" },
     { name = "streamlit", specifier = ">=1.63,<2" },
     { name = "torchvision", specifier = ">=0.29.0" },
 ]

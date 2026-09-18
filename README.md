@@ -35,6 +35,15 @@ Provider protocols keep embeddings, reranking, and generation configurable. Qdra
 only retrieval engine, Bedrock remains only the generation gateway, MLflow is the observability
 and experiment system, and Streamlit remains presentation. No orchestration framework is used.
 
+### Optional Phase 3 application database foundation
+
+Phase 3 adds an optional SQLAlchemy/Alembic foundation for a separate application lineage
+database. The `lineage-postgres` Docker service uses its own credentials, database, localhost-only
+port, and volume; it does not reuse MLflow's PostgreSQL database. Set `RAG__DATABASE__URL` only
+when running Phase 3 database operations. Fixture ingestion, deterministic evaluation, retrieval,
+and normal application startup remain database-independent. No lineage business tables or
+incremental-ingestion behavior are included yet.
+
 ### Retrieval foundations
 
 Embeddings are stored with citation payloads in Qdrant so semantic search returns the exact

@@ -26,6 +26,22 @@ services:
       timeout: 5s
       retries: 10
 
+  lineage-postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: ${LINEAGE_DB_USER:?set LINEAGE_DB_USER in .env}
+      POSTGRES_PASSWORD: ${LINEAGE_DB_PASSWORD:?set LINEAGE_DB_PASSWORD in .env}
+      POSTGRES_DB: ${LINEAGE_DB_NAME:?set LINEAGE_DB_NAME in .env}
+    ports:
+      - "127.0.0.1:5433:5432"
+    volumes:
+      - lineage_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
   mlflow:
     build:
       context: .
@@ -61,5 +77,6 @@ services:
 volumes:
   qdrant_data:
   mlflow_postgres_data:
+  lineage_postgres_data:
   mlflow_artifacts:
 

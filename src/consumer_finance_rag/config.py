@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 import yaml
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, PydanticBaseSettingsSource, SettingsConfigDict
 
 
@@ -43,6 +43,19 @@ class AWSSettings(BaseModel):
     retry_mode: Literal["standard", "adaptive"] = "standard"
     total_max_attempts: int = Field(default=3, ge=1)
     tcp_keepalive: bool = True
+
+
+class DatabaseSettings(BaseModel):
+    """Optional Phase 3 application database configuration."""
+
+    url: str | None = None
+
+    @field_validator("url", mode="before")
+    @classmethod
+    def blank_url_is_unconfigured(cls, value: object) -> object:
+        if isinstance(value, str) and not value.strip():
+            return None
+        return value
 
 
 class QdrantSettings(BaseModel):
@@ -124,6 +137,7 @@ class AppSettings(BaseSettings):
 
     models: ModelsSettings
     aws: AWSSettings = AWSSettings()
+    database: DatabaseSettings = DatabaseSettings()
     qdrant: QdrantSettings = QdrantSettings()
     chunking: ChunkingSettings = ChunkingSettings()
     retrieval: RetrievalSettings = RetrievalSettings()

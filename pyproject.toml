@@ -5,6 +5,7 @@ description = "Evidence-grounded U.S. consumer finance intelligence using hybrid
 readme = "README.md"
 requires-python = ">=3.12,<3.13"
 dependencies = [
+    "alembic>=1.16,<2",
     "boto3>=1.40",
     "botocore[crt]>=1.43.89",
     "litellm>=1.80",
@@ -17,6 +18,7 @@ dependencies = [
     "qdrant-client>=1.15,<2",
     "ragas>=0.4,<0.5",
     "sentence-transformers>=6,<7",
+    "sqlalchemy>=2,<3",
     "streamlit>=1.63,<2",
     "torchvision>=0.29.0",
 ]
