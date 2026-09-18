@@ -290,6 +290,63 @@ def test_document_versions_are_looked_up_deterministically(
     )
 
 
+def test_active_documents_load_with_latest_version_without_dropping_unversioned(
+    repository: LineageRepository,
+) -> None:
+    corpus, run = create_corpus_and_run(repository)
+    versioned = repository.create_document(
+        corpus.corpus_id,
+        "cfpb:versioned",
+        "source-versioned",
+        None,
+        run.run_id,
+    )
+    first = repository.create_document_version(
+        versioned.document_pk,
+        1,
+        hash_value(1),
+        hash_value(101),
+        hash_value(201),
+        "document-1",
+        "First",
+        "credit-cards",
+        None,
+        "1",
+        "First.",
+        run.run_id,
+    )
+    latest = repository.create_document_version(
+        versioned.document_pk,
+        2,
+        hash_value(2),
+        hash_value(102),
+        hash_value(202),
+        "document-2",
+        "Second",
+        "credit-cards",
+        None,
+        "2",
+        "Second.",
+        run.run_id,
+    )
+    repository.create_document(
+        corpus.corpus_id,
+        "cfpb:unversioned",
+        "source-unversioned",
+        None,
+        run.run_id,
+    )
+
+    rows = repository.list_active_documents_with_latest_versions(corpus.corpus_id)
+    by_source_key = {document.source_key: version for document, version in rows}
+
+    assert by_source_key == {
+        "cfpb:unversioned": None,
+        "cfpb:versioned": latest,
+    }
+    assert first is not latest
+
+
 def test_document_version_conflicts_are_domain_errors(
     repository: LineageRepository,
 ) -> None:

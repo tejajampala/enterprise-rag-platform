@@ -6,7 +6,7 @@ from collections.abc import Sequence
 from datetime import datetime
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import and_, func, select
 from sqlalchemy.orm import Session, selectinload
 
 from consumer_finance_rag.lineage.models import (
@@ -192,6 +192,40 @@ class LineageRepository:
                 .order_by(LineageDocument.source_key)
             )
         )
+
+    def list_active_documents_with_latest_versions(
+        self, corpus_id: UUID
+    ) -> list[tuple[LineageDocument, DocumentVersion | None]]:
+        """Load ACTIVE documents and their latest versions without N+1 queries."""
+
+        latest_numbers = (
+            select(
+                DocumentVersion.document_pk.label("document_pk"),
+                func.max(DocumentVersion.version_number).label("version_number"),
+            )
+            .group_by(DocumentVersion.document_pk)
+            .subquery()
+        )
+        statement = (
+            select(LineageDocument, DocumentVersion)
+            .outerjoin(
+                latest_numbers,
+                latest_numbers.c.document_pk == LineageDocument.document_pk,
+            )
+            .outerjoin(
+                DocumentVersion,
+                and_(
+                    DocumentVersion.document_pk == LineageDocument.document_pk,
+                    DocumentVersion.version_number == latest_numbers.c.version_number,
+                ),
+            )
+            .where(
+                LineageDocument.corpus_id == corpus_id,
+                LineageDocument.state == "ACTIVE",
+            )
+            .order_by(LineageDocument.source_key)
+        )
+        return list(self._session.execute(statement).tuples())
 
     def create_document(
         self,

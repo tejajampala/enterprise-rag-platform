@@ -58,6 +58,13 @@ class DatabaseSettings(BaseModel):
         return value
 
 
+class ManagedIngestionSettings(BaseModel):
+    """Identity for the independently managed Phase 3 corpus."""
+
+    corpus_key: str = "consumer-finance-managed"
+    qdrant_collection_prefix: str = "consumer_finance_managed"
+
+
 class QdrantSettings(BaseModel):
     url: str = "http://localhost:6333"
     collection_name: str = "consumer_finance_phase1"
@@ -138,6 +145,7 @@ class AppSettings(BaseSettings):
     models: ModelsSettings
     aws: AWSSettings = AWSSettings()
     database: DatabaseSettings = DatabaseSettings()
+    managed_ingestion: ManagedIngestionSettings = ManagedIngestionSettings()
     qdrant: QdrantSettings = QdrantSettings()
     chunking: ChunkingSettings = ChunkingSettings()
     retrieval: RetrievalSettings = RetrievalSettings()

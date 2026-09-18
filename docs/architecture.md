@@ -68,6 +68,20 @@ not mutate PostgreSQL, touch Qdrant, rebuild BM25, or treat embedding/chunking c
 source-document change. Missing documents are classified as `DELETED` only when the current
 snapshot is explicitly authoritative; otherwise deletion detection is reported as skipped.
 
+The first Phase 3 CLI connects the read sides without adding write orchestration:
+
+```text
+CorpusSnapshot --------------------> CurrentDocumentState ---+
+                                                             |
+LineageRepository (read-only) -----> PersistedDocumentState -+-> ChangePlan
+```
+
+`LineagePlanningService` is the small ORM/domain adapter. `scripts/ingest_incremental.py` selects
+fixture or evaluation corpus assembly, opens a caller-managed session, prints the plan, and exits
+without committing. An absent managed-corpus row is reported as uninitialized and treated as an
+empty previous state; it is never created by the dry run. The configured Qdrant prefix is
+informational at this milestone.
+
 Fixture and evaluation indexes are deliberately distinct. `scripts/ingest.py --mode fixture`
 writes `consumer_finance_phase1` plus `data/index/bm25_state.json`.
 `scripts/ingest.py --mode evaluation` requires downloaded records and writes

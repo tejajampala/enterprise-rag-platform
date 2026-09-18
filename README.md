@@ -41,8 +41,8 @@ Phase 3 adds an optional SQLAlchemy/Alembic foundation for a separate applicatio
 database. The `lineage-postgres` Docker service uses its own credentials, database, localhost-only
 port, and volume; it does not reuse MLflow's PostgreSQL database. Set `RAG__DATABASE__URL` only
 when running Phase 3 database operations. Fixture ingestion, deterministic evaluation, retrieval,
-and normal application startup remain database-independent. No lineage business tables or
-incremental-ingestion behavior are included yet.
+and normal application startup remain database-independent. The lineage schema, repository,
+pure change planner, and read-only planning CLI are present; applied incremental ingestion is not.
 
 ### Retrieval foundations
 
@@ -143,6 +143,22 @@ uv run streamlit run app/streamlit_app.py
 Open Streamlit at its displayed URL and MLflow at <http://localhost:5000>. Boto3 uses the standard
 AWS credential chain; never commit access keys. If Bedrock is not configured, the UI displays an
 actionable message rather than calling AWS.
+
+### Phase 3 managed-ingestion dry run
+
+After configuring `RAG__DATABASE__URL` and applying the application migration with
+`uv run alembic upgrade head`, inspect a deterministic plan without writing it:
+
+```bash
+uv run python scripts/ingest_incremental.py --mode fixture
+uv run python scripts/ingest_incremental.py --mode evaluation --authoritative-snapshot --details
+```
+
+Fixture mode uses only the six stable fixture documents. Evaluation mode requires the existing
+downloaded expanded corpus and combines it with the fixture using the production corpus assembler.
+This CLI is dry-run only: it does not mutate PostgreSQL or Qdrant, rewrite BM25 state, or perform
+embedding/model inference. The authoritative flag is required before absence can be planned as a
+deletion. There is deliberately no `--apply` option yet.
 
 ### Debug retrieval
 

@@ -69,3 +69,25 @@ def test_application_database_url_uses_nested_environment_override(
     settings = load_settings(path)
 
     assert settings.database.url == expected
+
+
+def test_managed_ingestion_settings_have_defaults_and_environment_overrides(
+    tmp_path: Path, monkeypatch: MonkeyPatch
+) -> None:
+    path = tmp_path / "config.yaml"
+    path.write_text(CONFIG, encoding="utf-8")
+
+    defaults = load_settings(path)
+
+    assert defaults.managed_ingestion.corpus_key == "consumer-finance-managed"
+    assert defaults.managed_ingestion.qdrant_collection_prefix == "consumer_finance_managed"
+
+    monkeypatch.setenv("RAG__MANAGED_INGESTION__CORPUS_KEY", "custom-managed")
+    monkeypatch.setenv(
+        "RAG__MANAGED_INGESTION__QDRANT_COLLECTION_PREFIX", "custom_prefix"
+    )
+
+    overridden = load_settings(path)
+
+    assert overridden.managed_ingestion.corpus_key == "custom-managed"
+    assert overridden.managed_ingestion.qdrant_collection_prefix == "custom_prefix"
