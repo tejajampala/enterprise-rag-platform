@@ -78,6 +78,40 @@ class ContextSettings(BaseModel):
     max_characters: int = Field(default=12000, gt=0)
 
 
+class MLflowSettings(BaseModel):
+    enabled: bool = True
+    tracking_uri: str = "http://localhost:5000"
+    experiment_name: str = "consumer-finance-rag"
+    evaluation_experiment_name: str = "consumer-finance-rag-evaluation"
+    evaluation_dataset_name: str = "consumer-finance-seed-evaluation-v1"
+    judge_model: str | None = None
+    report_directory: Path = Path("reports/evaluation")
+
+
+class EvaluationSettings(BaseModel):
+    dataset_path: Path = Path("data/evaluation/seed_cases.json")
+    dataset_name: str = "consumer-finance-seed-evaluation"
+    dataset_version: str = "1.0"
+    qdrant_collection_name: str = "consumer_finance_evaluation"
+    bm25_state_path: Path = Path("data/index/evaluation_bm25_state.json")
+    k_values: list[int] = Field(default_factory=lambda: [1, 3, 5, 10], min_length=1)
+
+    @model_validator(mode="after")
+    def k_values_are_positive_and_unique(self) -> EvaluationSettings:
+        if any(value <= 0 for value in self.k_values):
+            raise ValueError("evaluation K values must be positive")
+        if len(set(self.k_values)) != len(self.k_values):
+            raise ValueError("evaluation K values must be unique")
+        return self
+
+
+class CorpusExpansionSettings(BaseModel):
+    manifest_path: Path = Path("data/corpus_manifest.json")
+    cache_directory: Path = Path("data/evaluation_corpus/cache")
+    output_path: Path = Path("data/evaluation_corpus/cfpb_evaluation_corpus.json")
+    request_timeout_seconds: float = Field(default=30.0, gt=0)
+
+
 class AppSettings(BaseSettings):
     """Validated settings; nested values can use the ``RAG__`` environment prefix."""
 
@@ -94,6 +128,9 @@ class AppSettings(BaseSettings):
     chunking: ChunkingSettings = ChunkingSettings()
     retrieval: RetrievalSettings = RetrievalSettings()
     context: ContextSettings = ContextSettings()
+    mlflow: MLflowSettings = MLflowSettings()
+    evaluation: EvaluationSettings = EvaluationSettings()
+    corpus_expansion: CorpusExpansionSettings = CorpusExpansionSettings()
 
     @classmethod
     def settings_customise_sources(
@@ -116,6 +153,8 @@ class BedrockEnvironment(BaseSettings):
 
     bedrock_generation_model: str | None = None
     aws_region: str | None = None
+    mlflow_tracking_uri: str | None = None
+    mlflow_genai_judge_default_model: str | None = None
 
 
 def load_settings(path: str | Path = "config/config.yaml") -> AppSettings:
@@ -137,4 +176,11 @@ def load_settings(path: str | Path = "config/config.yaml") -> AppSettings:
         )
     if env.aws_region:
         updates["aws"] = settings.aws.model_copy(update={"region": env.aws_region})
+    mlflow_updates: dict[str, Any] = {}
+    if env.mlflow_tracking_uri:
+        mlflow_updates["tracking_uri"] = env.mlflow_tracking_uri
+    if env.mlflow_genai_judge_default_model:
+        mlflow_updates["judge_model"] = env.mlflow_genai_judge_default_model
+    if mlflow_updates:
+        updates["mlflow"] = settings.mlflow.model_copy(update=mlflow_updates)
     return settings.model_copy(update=updates)

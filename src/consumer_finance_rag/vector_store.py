@@ -114,6 +114,31 @@ class QdrantHybridStore:
         )
         return self._to_retrieved(result.points, rank_kind="sparse")
 
+    def indexed_chunk_hashes(self) -> dict[str, str]:
+        """Read stable chunk identities from the live collection without loading vectors/text."""
+
+        identities: dict[str, str] = {}
+        offset: Any | None = None
+        while True:
+            points, offset = self.client.scroll(
+                collection_name=self.settings.collection_name,
+                limit=256,
+                offset=offset,
+                with_payload=["chunk_id", "chunk_hash"],
+                with_vectors=False,
+            )
+            for point in points:
+                payload = point.payload or {}
+                chunk_id = payload.get("chunk_id")
+                chunk_hash = payload.get("chunk_hash")
+                if not isinstance(chunk_id, str) or not isinstance(chunk_hash, str):
+                    raise ValueError("Qdrant point is missing string chunk_id/chunk_hash payloads")
+                if chunk_id in identities:
+                    raise ValueError(f"Qdrant collection contains duplicate chunk ID: {chunk_id}")
+                identities[chunk_id] = chunk_hash
+            if offset is None:
+                return identities
+
     @staticmethod
     def _to_retrieved(points: Sequence[Any], *, rank_kind: str) -> list[RetrievedChunk]:
         retrieved: list[RetrievedChunk] = []

@@ -8,6 +8,7 @@ import boto3
 from botocore.config import Config
 from botocore.exceptions import BotoCoreError, ClientError
 
+from consumer_finance_rag.observability import NoOpTracer, Tracer, bedrock_token_usage
 from consumer_finance_rag.providers import LLMResult
 
 
@@ -36,6 +37,7 @@ class BedrockLLMProvider:
         total_max_attempts: int = 3,
         tcp_keepalive: bool = True,
         client: Any | None = None,
+        tracer: Tracer | None = None,
     ) -> None:
         self._region = region
         self._model_id = model_id
@@ -52,6 +54,7 @@ class BedrockLLMProvider:
             tcp_keepalive=tcp_keepalive,
         )
         self._client = client
+        self._tracer = tracer or NoOpTracer()
 
     @property
     def model_name(self) -> str:
@@ -72,41 +75,71 @@ class BedrockLLMProvider:
                 "AWS Bedrock generation is not configured. Set BEDROCK_GENERATION_MODEL "
                 "to a model ID enabled in your AWS account, and configure standard AWS credentials."
             )
-        try:
-            response = self._runtime_client().converse(
-                modelId=self._model_id,
-                system=[{"text": system_prompt}],
-                messages=[{"role": "user", "content": [{"text": user_prompt}]}],
-                inferenceConfig={
-                    "maxTokens": self._max_tokens,
-                    "temperature": self._temperature,
-                    "topP": self._top_p,
-                },
+        with self._tracer.span(
+            "bedrock_generation",
+            span_type="CHAT_MODEL",
+            attributes={
+                "mlflow.llm.model": self._model_id,
+                "mlflow.llm.provider": "bedrock",
+                "aws.region": self._region,
+                "generation.max_tokens": self._max_tokens,
+                "generation.temperature": self._temperature,
+                "generation.top_p": self._top_p,
+            },
+        ) as span:
+            span.set_inputs(
+                {
+                    "system_prompt_characters": len(system_prompt),
+                    "user_prompt_characters": len(user_prompt),
+                }
             )
-        except ClientError as error:
-            aws_error = error.response.get("Error", {})
-            code = str(aws_error.get("Code", "UnknownAWSServiceError"))
-            message = str(aws_error.get("Message", "AWS returned no error detail"))
-            request_id = error.response.get("ResponseMetadata", {}).get("RequestId")
-            request_detail = f"; request ID: {request_id}" if request_id else ""
-            raise BedrockInvocationError(
-                f"AWS Bedrock Converse failed [{code}]: {message}{request_detail}"
-            ) from error
-        except BotoCoreError as error:
-            raise BedrockInvocationError(f"AWS Bedrock client failed: {error}") from error
+            try:
+                response = self._runtime_client().converse(
+                    modelId=self._model_id,
+                    system=[{"text": system_prompt}],
+                    messages=[{"role": "user", "content": [{"text": user_prompt}]}],
+                    inferenceConfig={
+                        "maxTokens": self._max_tokens,
+                        "temperature": self._temperature,
+                        "topP": self._top_p,
+                    },
+                )
+            except ClientError as error:
+                aws_error = error.response.get("Error", {})
+                code = str(aws_error.get("Code", "UnknownAWSServiceError"))
+                message = str(aws_error.get("Message", "AWS returned no error detail"))
+                request_id = error.response.get("ResponseMetadata", {}).get("RequestId")
+                request_detail = f"; request ID: {request_id}" if request_id else ""
+                raise BedrockInvocationError(
+                    f"AWS Bedrock Converse failed [{code}]: {message}{request_detail}"
+                ) from error
+            except BotoCoreError as error:
+                raise BedrockInvocationError(f"AWS Bedrock client failed: {error}") from error
 
-        message = response.get("output", {}).get("message", {})
-        blocks = message.get("content", [])
-        text = "\n".join(str(block["text"]) for block in blocks if "text" in block).strip()
-        response_metadata: dict[str, Any] = {
-            "stop_reason": response.get("stopReason"),
-            "request_id": response.get("ResponseMetadata", {}).get("RequestId"),
-        }
-        usage = response.get("usage")
-        if isinstance(usage, dict):
-            response_metadata["usage"] = usage
-        return LLMResult(
-            text=text,
-            model_id=self._model_id,
-            response_metadata=response_metadata,
-        )
+            message = response.get("output", {}).get("message", {})
+            blocks = message.get("content", [])
+            text = "\n".join(str(block["text"]) for block in blocks if "text" in block).strip()
+            response_metadata: dict[str, Any] = {
+                "stop_reason": response.get("stopReason"),
+                "request_id": response.get("ResponseMetadata", {}).get("RequestId"),
+            }
+            usage = response.get("usage")
+            if isinstance(usage, dict):
+                response_metadata["usage"] = usage
+            result = LLMResult(
+                text=text,
+                model_id=self._model_id,
+                response_metadata=response_metadata,
+            )
+            token_usage = bedrock_token_usage(response_metadata)
+            if token_usage is not None:
+                span.set_attribute("mlflow.chat.tokenUsage", token_usage)
+            response_attributes = {
+                "generation.stop_reason": response_metadata.get("stop_reason"),
+                "aws.request_id": response_metadata.get("request_id"),
+            }
+            span.set_attributes(
+                {key: value for key, value in response_attributes.items() if value is not None}
+            )
+            span.set_outputs({"response": text})
+            return result

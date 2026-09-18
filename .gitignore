@@ -49,6 +49,7 @@ coverage.xml
 *.py.cover
 .hypothesis/
 .pytest_cache/
+.test-tmp/
 cover/
 
 # Translations
@@ -152,6 +153,7 @@ activemq-data/
 .env
 .envrc
 .venv
+.venv-phase2/
 env/
 venv/
 ENV/
@@ -220,3 +222,8 @@ __marimo__/
 
 # Generated Phase 1 lexical index state
 data/index/
+
+# Generated Phase 2 corpora and evaluation reports
+data/evaluation_corpus/
+reports/evaluation/
+.ragas/
