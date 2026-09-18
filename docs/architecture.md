@@ -29,6 +29,24 @@ compatibility IDs. This milestone defines persistence only: incremental ingestio
 classification, vector reuse, index activation, and automatic registration of the Phase 1 fixture
 or Phase 2 evaluation corpus are not implemented.
 
+The repository boundary for future managed-ingestion work is deliberately small:
+
+```text
+future service / business logic
+        |
+        v
+LineageRepository
+        |
+        v
+caller-owned SQLAlchemy Session
+        |
+        v
+application PostgreSQL
+```
+
+`LineageRepository` persists caller-supplied lineage facts and flushes them without committing.
+Change detection, incremental-ingestion decisions, and Qdrant publishing remain unimplemented.
+
 Fixture and evaluation indexes are deliberately distinct. `scripts/ingest.py --mode fixture`
 writes `consumer_finance_phase1` plus `data/index/bm25_state.json`.
 `scripts/ingest.py --mode evaluation` requires downloaded records and writes
