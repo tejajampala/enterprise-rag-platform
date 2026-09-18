@@ -5,20 +5,19 @@ from __future__ import annotations
 from logging.config import fileConfig
 
 from alembic import context
-from sqlalchemy import MetaData
 
 from consumer_finance_rag.config import load_settings
 from consumer_finance_rag.lineage.database import (
     create_database_engine,
     require_database_url,
 )
+from consumer_finance_rag.lineage.models import Base
 
 config = context.config
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
-# Business-table metadata is intentionally absent from this foundation migration setup.
-target_metadata = MetaData()
+target_metadata = Base.metadata
 
 
 def run_migrations_offline() -> None:

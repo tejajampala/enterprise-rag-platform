@@ -20,8 +20,14 @@ RAGPipeline.answer
 region, and MLflow destinations come from typed `config.py` settings. Provider protocols continue
 to isolate Hugging Face embeddings/reranking and Bedrock generation.
 
-Qdrant is the only retrieval database. PostgreSQL is introduced only as MLflow's backend store;
-there is no Phase 3 application-lineage schema.
+Qdrant remains the only retrieval database. PostgreSQL also has a separate, optional Phase 3
+application database; it never shares MLflow's database or metadata tables. The initial application
+schema records managed corpora, ingestion attempts, stable logical documents, immutable document
+versions and chunks, per-run document classifications, and immutable Qdrant index generations with
+their chunk membership. Application UUIDs connect versions across the existing content-derived
+compatibility IDs. This milestone defines persistence only: incremental ingestion, change
+classification, vector reuse, index activation, and automatic registration of the Phase 1 fixture
+or Phase 2 evaluation corpus are not implemented.
 
 Fixture and evaluation indexes are deliberately distinct. `scripts/ingest.py --mode fixture`
 writes `consumer_finance_phase1` plus `data/index/bm25_state.json`.
@@ -141,5 +147,5 @@ case list; it does not create an evaluator-specific retrieval implementation.
 
 Retrieved content remains untrusted prompt data. Traces avoid secrets and vectors. Boto3 uses
 standard credential resolution. Paid generation and judging require explicit commands/config.
-Authentication, ACLs, PII pipelines, document version history, incremental indexing, production
-deployment, online evaluation, and formal regression gates remain Phase 3 work.
+Authentication, ACLs, PII pipelines, lineage service logic, incremental indexing, production
+deployment, online evaluation, and formal regression gates remain future work.
