@@ -177,6 +177,14 @@ def make_index_state(
 
 def test_metadata_creates_all_application_tables(engine: Engine) -> None:
     assert set(inspect(engine).get_table_names()) == APPLICATION_TABLES
+    columns = {column["name"] for column in inspect(engine).get_columns("index_states")}
+    assert {
+        "bm25_state",
+        "index_configuration",
+        "index_configuration_fingerprint",
+        "error_message",
+        "failed_at",
+    }.issubset(columns)
 
 
 def test_domain_statuses_reject_unknown_values() -> None:
@@ -352,6 +360,43 @@ def test_index_generation_is_unique_per_corpus(session: Session) -> None:
         session.flush()
 
 
+def test_one_ingestion_run_may_reference_multiple_index_states(session: Session) -> None:
+    corpus = make_corpus(session)
+    run = make_run(session, corpus)
+    first = make_index_state(session, corpus, run)
+    second = make_index_state(
+        session,
+        corpus,
+        run,
+        generation=2,
+        collection="consumer_finance_managed_g0002",
+    )
+
+    assert run.index_states == [first, second]
+
+
+def test_partial_unique_index_rejects_multiple_active_generations(
+    session: Session,
+) -> None:
+    corpus = make_corpus(session)
+    first_run = make_run(session, corpus)
+    second_run = make_run(session, corpus)
+    first = make_index_state(session, corpus, first_run)
+    second = make_index_state(
+        session,
+        corpus,
+        second_run,
+        generation=2,
+        collection="consumer_finance_managed_g0002",
+    )
+    first.status = "ACTIVE"
+    session.flush()
+    second.status = "ACTIVE"
+
+    with pytest.raises(IntegrityError):
+        session.flush()
+
+
 @pytest.mark.parametrize("collision", ["composite_key", "point_id"])
 def test_index_state_chunk_identity_constraints(session: Session, collision: str) -> None:
     corpus = make_corpus(session)
@@ -382,6 +427,33 @@ def test_index_state_chunk_identity_constraints(session: Session, collision: str
             dense_source_chunk=first_chunk,
         )
     )
+    with pytest.raises(IntegrityError):
+        session.flush()
+
+
+@pytest.mark.parametrize(
+    ("dense_action", "use_source"),
+    [("COMPUTED", True), ("REUSED", False)],
+)
+def test_dense_provenance_check_constraint(
+    session: Session, dense_action: str, use_source: bool
+) -> None:
+    corpus = make_corpus(session)
+    run = make_run(session, corpus)
+    document = make_document(session, corpus, run)
+    version = make_version(session, document, run)
+    chunk = make_chunk(session, version)
+    index_state = make_index_state(session, corpus, run)
+    session.add(
+        IndexStateChunk(
+            index_state=index_state,
+            chunk=chunk,
+            qdrant_point_id=uuid4(),
+            dense_action=dense_action,
+            dense_source_chunk=chunk if use_source else None,
+        )
+    )
+
     with pytest.raises(IntegrityError):
         session.flush()
 
@@ -442,7 +514,21 @@ def test_alembic_revision_preserves_unrelated_tables(
     command.upgrade(alembic_config, "head")
 
     inspection_engine = create_engine(database_url)
-    assert APPLICATION_TABLES.issubset(inspect(inspection_engine).get_table_names())
+    inspector = inspect(inspection_engine)
+    assert APPLICATION_TABLES.issubset(inspector.get_table_names())
+    index_columns = {column["name"] for column in inspector.get_columns("index_states")}
+    assert {
+        "bm25_state",
+        "index_configuration",
+        "index_configuration_fingerprint",
+        "error_message",
+        "failed_at",
+    }.issubset(index_columns)
+    ingestion_uniques = inspector.get_unique_constraints("index_states")
+    assert not any(
+        constraint.get("column_names") == ["ingestion_run_id"]
+        for constraint in ingestion_uniques
+    )
     inspection_engine.dispose()
 
     command.downgrade(alembic_config, "base")

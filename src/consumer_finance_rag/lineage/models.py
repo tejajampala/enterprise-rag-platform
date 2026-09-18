@@ -13,13 +13,16 @@ from sqlalchemy import (
     CheckConstraint,
     DateTime,
     ForeignKey,
+    Index,
     Integer,
     String,
     Text,
     UniqueConstraint,
     Uuid,
     func,
+    text,
 )
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship, validates
 
 INGESTION_RUN_STATUSES = frozenset({"RUNNING", "SUCCEEDED", "FAILED", "NOOP"})
@@ -27,6 +30,7 @@ DOCUMENT_STATES = frozenset({"ACTIVE", "DELETED"})
 DOCUMENT_CHANGE_TYPES = frozenset({"NEW", "CHANGED", "UNCHANGED", "DELETED"})
 INDEX_STATE_STATUSES = frozenset({"BUILDING", "READY", "ACTIVE", "RETIRED", "FAILED"})
 DENSE_ACTIONS = frozenset({"COMPUTED", "REUSED"})
+PORTABLE_JSON = JSON().with_variant(JSONB(), "postgresql")
 
 
 def utc_now() -> datetime:
@@ -105,7 +109,7 @@ class IngestionRun(Base):
 
     corpus: Mapped[Corpus] = relationship(back_populates="ingestion_runs")
     classifications: Mapped[list[IngestionRunDocument]] = relationship(back_populates="run")
-    index_state: Mapped[IndexState | None] = relationship(back_populates="ingestion_run")
+    index_states: Mapped[list[IndexState]] = relationship(back_populates="ingestion_run")
 
     @validates("status")
     def validate_status(self, _key: str, value: str) -> str:
@@ -293,9 +297,17 @@ class IndexState(Base):
     __tablename__ = "index_states"
     __table_args__ = (
         UniqueConstraint("corpus_id", "generation", name="uq_index_states_corpus_generation"),
+        Index(
+            "uq_index_states_one_active_per_corpus",
+            "corpus_id",
+            unique=True,
+            postgresql_where=text("status = 'ACTIVE'"),
+            sqlite_where=text("status = 'ACTIVE'"),
+        ),
         CheckConstraint("generation > 0", name="ck_index_states_generation_positive"),
         CheckConstraint(
-            "embedding_dimension > 0", name="ck_index_states_embedding_dimension_positive"
+            "embedding_dimension IS NULL OR embedding_dimension > 0",
+            name="ck_index_states_embedding_dimension_positive",
         ),
         CheckConstraint("document_count >= 0", name="ck_index_states_document_count_nonnegative"),
         CheckConstraint("chunk_count >= 0", name="ck_index_states_chunk_count_nonnegative"),
@@ -307,15 +319,18 @@ class IndexState(Base):
     )
     generation: Mapped[int] = mapped_column(Integer, nullable=False)
     ingestion_run_id: Mapped[UUID] = mapped_column(
-        Uuid, ForeignKey("ingestion_runs.run_id"), nullable=False, unique=True
+        Uuid, ForeignKey("ingestion_runs.run_id"), nullable=False
     )
     status: Mapped[str] = mapped_column(String(32), nullable=False)
     qdrant_collection: Mapped[str] = mapped_column(String(255), nullable=False, unique=True)
     snapshot_hash: Mapped[str] = mapped_column(CHAR(64), nullable=False)
     bm25_corpus_hash: Mapped[str | None] = mapped_column(CHAR(64))
     bm25_state_hash: Mapped[str | None] = mapped_column(CHAR(64))
+    bm25_state: Mapped[dict[str, Any] | None] = mapped_column(PORTABLE_JSON)
+    index_configuration: Mapped[dict[str, Any] | None] = mapped_column(PORTABLE_JSON)
+    index_configuration_fingerprint: Mapped[str | None] = mapped_column(CHAR(64))
     embedding_fingerprint: Mapped[str] = mapped_column(CHAR(64), nullable=False)
-    embedding_dimension: Mapped[int] = mapped_column(Integer, nullable=False)
+    embedding_dimension: Mapped[int | None] = mapped_column(Integer)
     chunking_fingerprint: Mapped[str] = mapped_column(CHAR(64), nullable=False)
     document_count: Mapped[int] = mapped_column(Integer, nullable=False)
     chunk_count: Mapped[int] = mapped_column(Integer, nullable=False)
@@ -324,9 +339,11 @@ class IndexState(Base):
     )
     activated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     retired_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    error_message: Mapped[str | None] = mapped_column(Text)
+    failed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     corpus: Mapped[Corpus] = relationship(back_populates="index_states")
-    ingestion_run: Mapped[IngestionRun] = relationship(back_populates="index_state")
+    ingestion_run: Mapped[IngestionRun] = relationship(back_populates="index_states")
     chunks: Mapped[list[IndexStateChunk]] = relationship(back_populates="index_state")
 
     @validates("status")
@@ -343,6 +360,11 @@ class IndexStateChunk(Base):
     __table_args__ = (
         UniqueConstraint(
             "index_state_id", "qdrant_point_id", name="uq_index_state_chunks_state_point"
+        ),
+        CheckConstraint(
+            "(dense_action = 'COMPUTED' AND dense_source_chunk_pk IS NULL) OR "
+            "(dense_action = 'REUSED' AND dense_source_chunk_pk IS NOT NULL)",
+            name="ck_index_state_chunks_dense_provenance",
         ),
     )
 

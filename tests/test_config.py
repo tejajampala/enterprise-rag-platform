@@ -91,3 +91,31 @@ def test_managed_ingestion_settings_have_defaults_and_environment_overrides(
 
     assert overridden.managed_ingestion.corpus_key == "custom-managed"
     assert overridden.managed_ingestion.qdrant_collection_prefix == "custom_prefix"
+
+
+def test_managed_index_settings_are_typed_and_environment_configurable(
+    tmp_path: Path, monkeypatch: MonkeyPatch
+) -> None:
+    path = tmp_path / "config.yaml"
+    path.write_text(CONFIG, encoding="utf-8")
+
+    defaults = load_settings(path)
+
+    assert defaults.managed_index.format_version == "managed-hybrid-index-v1"
+    assert defaults.managed_index.dense_vector_name == "dense_hnsw"
+    assert defaults.managed_index.sparse_vector_name == "sparse_bm25"
+    assert defaults.managed_index.distance_metric == "cosine"
+    assert defaults.managed_index.hnsw_m == 16
+    assert defaults.managed_index.hnsw_ef_construct == 100
+    assert defaults.managed_index.bm25_k1 == 1.2
+    assert defaults.managed_index.bm25_b == 0.75
+    assert defaults.managed_index.sparse_modifier == "none"
+    assert defaults.managed_index.sparse_on_disk is False
+
+    monkeypatch.setenv("RAG__MANAGED_INDEX__HNSW_M", "32")
+    monkeypatch.setenv("RAG__MANAGED_INDEX__BM25_K1", "1.5")
+
+    overridden = load_settings(path)
+
+    assert overridden.managed_index.hnsw_m == 32
+    assert overridden.managed_index.bm25_k1 == 1.5

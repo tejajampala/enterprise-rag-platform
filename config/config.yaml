@@ -33,6 +33,18 @@ managed_ingestion:
   corpus_key: consumer-finance-managed
   qdrant_collection_prefix: consumer_finance_managed
 
+managed_index:
+  format_version: managed-hybrid-index-v1
+  dense_vector_name: dense_hnsw
+  sparse_vector_name: sparse_bm25
+  distance_metric: cosine
+  hnsw_m: 16
+  hnsw_ef_construct: 100
+  bm25_k1: 1.2
+  bm25_b: 0.75
+  sparse_modifier: none
+  sparse_on_disk: false
+
 qdrant:
   url: http://localhost:6333
   collection_name: consumer_finance_phase1

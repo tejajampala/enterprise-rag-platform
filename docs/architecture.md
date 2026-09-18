@@ -103,6 +103,28 @@ The configured Qdrant prefix is registration metadata only. Apply never creates 
 `index_state_chunks`, calls Qdrant, calculates embeddings, or writes BM25 state. Retrieval therefore
 continues to use the unchanged Phase 1/Phase 2 indexes.
 
+The managed-index persistence foundation defines immutable generation metadata without publishing
+an index yet. PostgreSQL is the future activation authority and permits only these first-version
+transitions:
+
+```text
+BUILDING -> READY -> ACTIVE -> RETIRED
+    |          |
+    +----------+-> FAILED
+```
+
+`BUILDING` may temporarily lack an embedding dimension, BM25 state, or canonical index
+configuration. A generation cannot become `READY` until those values and their deterministic
+hashes are present. The complete BM25 query-encoder state is stored as generation-specific JSONB
+(portable JSON in SQLite tests), so future runtime resolution can obtain the physical collection
+and matching lexical encoder from one ACTIVE PostgreSQL row. One ingestion snapshot may own
+multiple generation attempts, while a partial unique index permits only one ACTIVE generation per
+corpus. Generation-number allocation still requires a future explicit locked transaction.
+
+This milestone does not create, retrieve, validate, or mutate Qdrant collections; does not run
+embedding inference; and does not activate a managed generation. The existing Phase 1 fixture and
+Phase 2 evaluation indexing/retrieval paths remain independent.
+
 Fixture and evaluation indexes are deliberately distinct. `scripts/ingest.py --mode fixture`
 writes `consumer_finance_phase1` plus `data/index/bm25_state.json`.
 `scripts/ingest.py --mode evaluation` requires downloaded records and writes

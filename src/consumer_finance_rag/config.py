@@ -65,6 +65,21 @@ class ManagedIngestionSettings(BaseModel):
     qdrant_collection_prefix: str = "consumer_finance_managed"
 
 
+class ManagedIndexSettings(BaseModel):
+    """Immutable build settings for Phase 3 managed index generations."""
+
+    format_version: str = "managed-hybrid-index-v1"
+    dense_vector_name: str = "dense_hnsw"
+    sparse_vector_name: str = "sparse_bm25"
+    distance_metric: Literal["cosine"] = "cosine"
+    hnsw_m: int = Field(default=16, gt=0)
+    hnsw_ef_construct: int = Field(default=100, gt=0)
+    bm25_k1: float = Field(default=1.2, gt=0)
+    bm25_b: float = Field(default=0.75, ge=0, le=1)
+    sparse_modifier: Literal["none"] = "none"
+    sparse_on_disk: bool = False
+
+
 class QdrantSettings(BaseModel):
     url: str = "http://localhost:6333"
     collection_name: str = "consumer_finance_phase1"
@@ -146,6 +161,7 @@ class AppSettings(BaseSettings):
     aws: AWSSettings = AWSSettings()
     database: DatabaseSettings = DatabaseSettings()
     managed_ingestion: ManagedIngestionSettings = ManagedIngestionSettings()
+    managed_index: ManagedIndexSettings = ManagedIndexSettings()
     qdrant: QdrantSettings = QdrantSettings()
     chunking: ChunkingSettings = ChunkingSettings()
     retrieval: RetrievalSettings = RetrievalSettings()

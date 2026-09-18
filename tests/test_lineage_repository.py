@@ -122,21 +122,39 @@ def create_index_state(
     generation: int,
     status: str,
 ) -> IndexState:
-    return repository.create_index_state(
+    state = repository.create_building_index_state(
         corpus.corpus_id,
         generation=generation,
         ingestion_run_id=run_id,
-        status=status,
         qdrant_collection=f"{corpus.qdrant_collection_prefix}-g{generation:04d}",
         snapshot_hash=hash_value(700 + generation),
         embedding_fingerprint=hash_value(800),
-        embedding_dimension=1024,
         chunking_fingerprint=hash_value(400),
         document_count=1,
         chunk_count=2,
+    )
+    if status == "BUILDING":
+        return state
+    repository.update_index_build_metadata(
+        state.index_state_id,
+        bm25_state={"vocabulary": {"finance": 0}},
         bm25_corpus_hash=hash_value(900),
         bm25_state_hash=hash_value(901),
+        index_configuration={"format_version": "test-v1"},
+        index_configuration_fingerprint=hash_value(902),
+        embedding_dimension=1024,
+        document_count=1,
+        chunk_count=2,
     )
+    repository.transition_index_state(state.index_state_id, "BUILDING", "READY")
+    if status == "ACTIVE":
+        repository.transition_index_state(
+            state.index_state_id,
+            "READY",
+            "ACTIVE",
+            occurred_at=datetime.now(UTC),
+        )
+    return state
 
 
 def test_create_get_and_idempotently_get_corpus(repository: LineageRepository) -> None:
@@ -415,12 +433,149 @@ def test_create_latest_and_active_index_state(repository: LineageRepository) -> 
         repository, corpus, second_run.run_id, generation=2, status="BUILDING"
     )
 
-    activated = repository.set_index_state_status(second.index_state_id, "ACTIVE")
+    repository.update_index_build_metadata(
+        second.index_state_id,
+        bm25_state={"vocabulary": {"finance": 0}},
+        bm25_corpus_hash=hash_value(900),
+        bm25_state_hash=hash_value(901),
+        index_configuration={"format_version": "test-v1"},
+        index_configuration_fingerprint=hash_value(902),
+        embedding_dimension=1024,
+        document_count=1,
+        chunk_count=2,
+    )
+    repository.transition_index_state(second.index_state_id, "BUILDING", "READY")
+    activated = repository.transition_index_state(
+        second.index_state_id,
+        "READY",
+        "ACTIVE",
+        occurred_at=datetime.now(UTC),
+    )
 
     assert repository.get_latest_index_state(corpus.corpus_id) is second
     assert repository.get_active_index_state(corpus.corpus_id) is second
     assert activated.status == "ACTIVE"
     assert first.status == "READY"
+
+
+def test_building_index_state_can_be_incomplete_and_one_run_can_have_multiple(
+    repository: LineageRepository,
+) -> None:
+    corpus, run = create_corpus_and_run(repository)
+
+    first = repository.create_building_index_state(
+        corpus.corpus_id,
+        generation=1,
+        ingestion_run_id=run.run_id,
+        qdrant_collection="consumer-finance-managed-g000001",
+        snapshot_hash=hash_value(700),
+        embedding_fingerprint=hash_value(800),
+        chunking_fingerprint=hash_value(400),
+    )
+    second = repository.create_building_index_state(
+        corpus.corpus_id,
+        generation=2,
+        ingestion_run_id=run.run_id,
+        qdrant_collection="consumer-finance-managed-g000002",
+        snapshot_hash=hash_value(700),
+        embedding_fingerprint=hash_value(800),
+        chunking_fingerprint=hash_value(400),
+    )
+
+    assert first.embedding_dimension is None
+    assert first.bm25_state is None
+    assert first.index_configuration is None
+    assert repository.get_index_state(first.index_state_id) is first
+    assert repository.list_index_states(corpus.corpus_id) == [first, second]
+    assert repository.get_latest_index_state(corpus.corpus_id) is second
+    assert repository.get_latest_generation_number(corpus.corpus_id) == 2
+    assert run.index_states == [first, second]
+
+
+def test_build_metadata_and_lifecycle_transitions(repository: LineageRepository) -> None:
+    corpus, run = create_corpus_and_run(repository)
+    state = repository.create_building_index_state(
+        corpus.corpus_id,
+        generation=1,
+        ingestion_run_id=run.run_id,
+        qdrant_collection="consumer-finance-managed-g000001",
+        snapshot_hash=hash_value(700),
+        embedding_fingerprint=hash_value(800),
+        chunking_fingerprint=hash_value(400),
+    )
+
+    with pytest.raises(InvalidLineageStateError, match="not ready"):
+        repository.transition_index_state(state.index_state_id, "BUILDING", "READY")
+
+    updated = repository.update_index_build_metadata(
+        state.index_state_id,
+        bm25_state={"vocabulary": {"credit": 0}, "document_count": 1},
+        bm25_state_hash=hash_value(901),
+        bm25_corpus_hash=hash_value(900),
+        index_configuration={"format_version": "managed-hybrid-index-v1"},
+        index_configuration_fingerprint=hash_value(902),
+        embedding_dimension=1024,
+        document_count=6,
+        chunk_count=12,
+    )
+    ready = repository.transition_index_state(
+        state.index_state_id, "BUILDING", "READY"
+    )
+    assert ready.status == "READY"
+    activated_at = datetime.now(UTC)
+    active = repository.transition_index_state(
+        state.index_state_id,
+        "READY",
+        "ACTIVE",
+        occurred_at=activated_at,
+    )
+    assert active.status == "ACTIVE"
+    retired_at = datetime.now(UTC)
+    retired = repository.transition_index_state(
+        state.index_state_id,
+        "ACTIVE",
+        "RETIRED",
+        occurred_at=retired_at,
+    )
+
+    assert updated.embedding_dimension == 1024
+    assert updated.document_count == 6
+    assert updated.chunk_count == 12
+    assert active.activated_at == activated_at
+    assert retired.status == "RETIRED"
+    assert retired.retired_at == retired_at
+
+
+def test_failed_index_state_cannot_be_activated(repository: LineageRepository) -> None:
+    corpus, run = create_corpus_and_run(repository)
+    state = repository.create_building_index_state(
+        corpus.corpus_id,
+        generation=1,
+        ingestion_run_id=run.run_id,
+        qdrant_collection="consumer-finance-managed-g000001",
+        snapshot_hash=hash_value(700),
+        embedding_fingerprint=hash_value(800),
+        chunking_fingerprint=hash_value(400),
+    )
+    failed_at = datetime.now(UTC)
+
+    failed = repository.mark_index_state_failed(
+        state.index_state_id,
+        "BUILDING",
+        "validation failed",
+        failed_at,
+    )
+
+    assert failed.status == "FAILED"
+    assert failed.error_message == "validation failed"
+    assert failed.failed_at == failed_at
+    with pytest.raises(InvalidLineageStateError, match="not allowed"):
+        repository.transition_index_state(
+            state.index_state_id,
+            "FAILED",
+            "ACTIVE",
+            occurred_at=datetime.now(UTC),
+        )
 
 
 def test_multiple_active_index_states_are_rejected(repository: LineageRepository) -> None:
@@ -431,10 +586,10 @@ def test_multiple_active_index_states_are_rejected(repository: LineageRepository
     second_run = repository.start_ingestion_run(
         corpus.corpus_id, authoritative_snapshot=True
     )
-    create_index_state(repository, corpus, second_run.run_id, generation=2, status="ACTIVE")
-
-    with pytest.raises(InvalidLineageStateError, match="more than one ACTIVE"):
-        repository.get_active_index_state(corpus.corpus_id)
+    with pytest.raises(InvalidLineageStateError, match="already has ACTIVE"):
+        create_index_state(
+            repository, corpus, second_run.run_id, generation=2, status="ACTIVE"
+        )
     assert first.status == "ACTIVE"
 
 
@@ -495,6 +650,35 @@ def test_index_membership_and_exact_hash_reuse_lookup(
     assert [match.chunk_pk for match in matches] == [exact.chunk_pk]
     assert matches[0].index_memberships == [membership]
     assert matches[0].index_memberships[0].index_state.embedding_fingerprint == hash_value(800)
+
+
+@pytest.mark.parametrize(
+    ("dense_action", "with_source", "message"),
+    [
+        ("COMPUTED", True, "cannot reference"),
+        ("REUSED", False, "requires a source"),
+    ],
+)
+def test_dense_provenance_pairing_is_validated(
+    repository: LineageRepository,
+    dense_action: str,
+    with_source: bool,
+    message: str,
+) -> None:
+    corpus, run, _document, version = create_document_and_version(repository)
+    chunk = repository.create_chunks(version.document_version_id, [chunk_input(0)])[0]
+    state = create_index_state(
+        repository, corpus, run.run_id, generation=1, status="BUILDING"
+    )
+
+    with pytest.raises(InvalidLineageStateError, match=message):
+        repository.record_index_state_chunk(
+            state.index_state_id,
+            chunk.chunk_pk,
+            uuid4(),
+            dense_action,
+            dense_source_chunk_pk=chunk.chunk_pk if with_source else None,
+        )
 
 
 def test_repository_methods_do_not_commit(session: Session) -> None:

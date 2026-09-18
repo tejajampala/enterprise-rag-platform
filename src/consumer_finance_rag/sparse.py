@@ -7,8 +7,9 @@ import json
 import math
 import re
 from collections import Counter
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from pathlib import Path
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -36,6 +37,35 @@ class BM25State(BaseModel):
     corpus_hash: str = Field(min_length=64, max_length=64)
     k1: float = 1.2
     b: float = 0.75
+
+
+def bm25_state_to_json_dict(state: BM25State) -> dict[str, Any]:
+    """Return the complete JSON-compatible state used by managed generations."""
+
+    return state.model_dump(mode="json")
+
+
+def bm25_state_from_json_dict(payload: Mapping[str, Any]) -> BM25State:
+    """Validate a managed-generation JSON value as a complete BM25 state."""
+
+    return BM25State.model_validate(dict(payload))
+
+
+def canonical_bm25_state(state: BM25State) -> str:
+    """Serialize BM25 state deterministically for hashing and JSONB verification."""
+
+    return json.dumps(
+        bm25_state_to_json_dict(state),
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+
+
+def bm25_state_hash(state: BM25State) -> str:
+    """Return a deterministic SHA-256 for the complete query-encoder state."""
+
+    return hashlib.sha256(canonical_bm25_state(state).encode("utf-8")).hexdigest()
 
 
 class BM25SparseEncoder:

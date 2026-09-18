@@ -2,17 +2,23 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from datetime import datetime
+from typing import Any
 from uuid import UUID
 
 from sqlalchemy import and_, func, select
 from sqlalchemy.orm import Session, selectinload
 
+from consumer_finance_rag.lineage.index_state import (
+    IndexStateReadyMetadata,
+    IndexStateValidationError,
+    validate_index_state_ready,
+    validate_index_state_transition,
+)
 from consumer_finance_rag.lineage.models import (
     DENSE_ACTIONS,
     DOCUMENT_CHANGE_TYPES,
-    INDEX_STATE_STATUSES,
     Corpus,
     DocumentVersion,
     IndexState,
@@ -526,6 +532,23 @@ class LineageRepository:
             )
         return active[0] if active else None
 
+    def get_index_state(self, index_state_id: UUID) -> IndexState | None:
+        """Return one managed index generation, if present."""
+
+        return self._session.get(IndexState, index_state_id)
+
+    def list_index_states(self, corpus_id: UUID) -> list[IndexState]:
+        """List a corpus's immutable generation attempts in generation order."""
+
+        self._require_corpus(corpus_id)
+        return list(
+            self._session.scalars(
+                select(IndexState)
+                .where(IndexState.corpus_id == corpus_id)
+                .order_by(IndexState.generation, IndexState.index_state_id)
+            )
+        )
+
     def get_latest_index_state(self, corpus_id: UUID) -> IndexState | None:
         """Return the greatest index generation for a corpus."""
 
@@ -536,34 +559,42 @@ class LineageRepository:
             .limit(1)
         )
 
-    def create_index_state(
+    def get_latest_generation_number(self, corpus_id: UUID) -> int:
+        """Return the latest generation number, or zero; callers must lock allocation."""
+
+        self._require_corpus(corpus_id)
+        return (
+            self._session.scalar(
+                select(func.max(IndexState.generation)).where(
+                    IndexState.corpus_id == corpus_id
+                )
+            )
+            or 0
+        )
+
+    def create_building_index_state(
         self,
         corpus_id: UUID,
         generation: int,
         ingestion_run_id: UUID,
-        status: str,
         qdrant_collection: str,
         snapshot_hash: str,
         embedding_fingerprint: str,
-        embedding_dimension: int,
         chunking_fingerprint: str,
-        document_count: int,
-        chunk_count: int,
-        bm25_corpus_hash: str | None = None,
-        bm25_state_hash: str | None = None,
+        document_count: int = 0,
+        chunk_count: int = 0,
     ) -> IndexState:
-        """Persist caller-supplied metadata for an index generation."""
+        """Create an incomplete BUILDING generation without committing."""
 
         self._require_corpus(corpus_id)
         run = self._require_ingestion_run(ingestion_run_id)
         self._require_same_corpus(corpus_id, run.corpus_id, "ingestion run")
-        self._require_domain_value("status", status, INDEX_STATE_STATUSES)
         if generation <= 0:
             raise InvalidLineageStateError("Index generation must be positive")
-        if embedding_dimension <= 0:
-            raise InvalidLineageStateError("Embedding dimension must be positive")
         if document_count < 0 or chunk_count < 0:
             raise InvalidLineageStateError("Index document and chunk counts cannot be negative")
+        if not qdrant_collection.strip():
+            raise InvalidLineageStateError("Qdrant collection cannot be empty")
         existing_generation = self._session.scalar(
             select(IndexState.index_state_id).where(
                 IndexState.corpus_id == corpus_id,
@@ -573,15 +604,6 @@ class LineageRepository:
         if existing_generation is not None:
             raise LineageConflictError(
                 f"Corpus {corpus_id} already has index generation {generation}"
-            )
-        existing_run = self._session.scalar(
-            select(IndexState.index_state_id).where(
-                IndexState.ingestion_run_id == ingestion_run_id
-            )
-        )
-        if existing_run is not None:
-            raise LineageConflictError(
-                f"Ingestion run {ingestion_run_id} already has an index state"
             )
         existing_collection = self._session.scalar(
             select(IndexState.index_state_id).where(
@@ -596,13 +618,11 @@ class LineageRepository:
             corpus_id=corpus_id,
             generation=generation,
             ingestion_run_id=ingestion_run_id,
-            status=status,
+            status="BUILDING",
             qdrant_collection=qdrant_collection,
             snapshot_hash=snapshot_hash,
-            bm25_corpus_hash=bm25_corpus_hash,
-            bm25_state_hash=bm25_state_hash,
             embedding_fingerprint=embedding_fingerprint,
-            embedding_dimension=embedding_dimension,
+            embedding_dimension=None,
             chunking_fingerprint=chunking_fingerprint,
             document_count=document_count,
             chunk_count=chunk_count,
@@ -611,14 +631,109 @@ class LineageRepository:
         self._session.flush()
         return state
 
-    def set_index_state_status(self, index_state_id: UUID, status: str) -> IndexState:
-        """Set a validated index status without applying activation orchestration."""
+    def update_index_build_metadata(
+        self,
+        index_state_id: UUID,
+        *,
+        bm25_state: Mapping[str, Any],
+        bm25_state_hash: str,
+        bm25_corpus_hash: str,
+        index_configuration: Mapping[str, Any],
+        index_configuration_fingerprint: str,
+        embedding_dimension: int,
+        document_count: int,
+        chunk_count: int,
+    ) -> IndexState:
+        """Populate validated build outputs while a generation remains BUILDING."""
 
-        self._require_domain_value("status", status, INDEX_STATE_STATUSES)
         state = self._require_index_state(index_state_id)
-        state.status = status
+        if state.status != "BUILDING":
+            raise InvalidLineageStateError(
+                f"Index state {index_state_id} is {state.status}, not BUILDING"
+            )
+        if embedding_dimension <= 0:
+            raise InvalidLineageStateError("Embedding dimension must be positive")
+        if document_count < 0 or chunk_count < 0:
+            raise InvalidLineageStateError("Index document and chunk counts cannot be negative")
+        state.bm25_state = dict(bm25_state)
+        state.bm25_state_hash = bm25_state_hash
+        state.bm25_corpus_hash = bm25_corpus_hash
+        state.index_configuration = dict(index_configuration)
+        state.index_configuration_fingerprint = index_configuration_fingerprint
+        state.embedding_dimension = embedding_dimension
+        state.document_count = document_count
+        state.chunk_count = chunk_count
         self._session.flush()
         return state
+
+    def transition_index_state(
+        self,
+        index_state_id: UUID,
+        expected_current_status: str,
+        target_status: str,
+        *,
+        occurred_at: datetime | None = None,
+        error_message: str | None = None,
+    ) -> IndexState:
+        """Persist one validated state transition without committing."""
+
+        state = self._require_index_state(index_state_id)
+        if state.status != expected_current_status:
+            raise InvalidLineageStateError(
+                f"Index state {index_state_id} is {state.status}, "
+                f"not {expected_current_status}"
+            )
+        try:
+            validate_index_state_transition(expected_current_status, target_status)
+        except IndexStateValidationError as exc:
+            raise InvalidLineageStateError(str(exc)) from exc
+
+        if target_status == "READY":
+            try:
+                validate_index_state_ready(self._ready_metadata(state))
+            except IndexStateValidationError as exc:
+                raise InvalidLineageStateError(str(exc)) from exc
+        elif target_status == "ACTIVE":
+            self._require_transition_timestamp(occurred_at)
+            active = self.get_active_index_state(state.corpus_id)
+            if active is not None and active.index_state_id != state.index_state_id:
+                raise InvalidLineageStateError(
+                    f"Corpus {state.corpus_id} already has ACTIVE generation "
+                    f"{active.generation}"
+                )
+            state.activated_at = occurred_at
+        elif target_status == "RETIRED":
+            self._require_transition_timestamp(occurred_at)
+            state.retired_at = occurred_at
+        elif target_status == "FAILED":
+            self._require_transition_timestamp(occurred_at)
+            if not error_message or not error_message.strip():
+                raise InvalidLineageStateError(
+                    "FAILED index state requires a non-empty error message"
+                )
+            state.error_message = error_message
+            state.failed_at = occurred_at
+
+        state.status = target_status
+        self._session.flush()
+        return state
+
+    def mark_index_state_failed(
+        self,
+        index_state_id: UUID,
+        expected_current_status: str,
+        error_message: str,
+        failed_at: datetime,
+    ) -> IndexState:
+        """Mark a BUILDING or READY generation FAILED without committing."""
+
+        return self.transition_index_state(
+            index_state_id,
+            expected_current_status,
+            "FAILED",
+            occurred_at=failed_at,
+            error_message=error_message,
+        )
 
     def list_index_state_chunks(self, index_state_id: UUID) -> list[IndexStateChunk]:
         """List generation membership in deterministic chunk order."""
@@ -654,6 +769,14 @@ class LineageRepository:
             "chunk",
         )
         self._require_domain_value("dense_action", dense_action, DENSE_ACTIONS)
+        if dense_action == "COMPUTED" and dense_source_chunk_pk is not None:
+            raise InvalidLineageStateError(
+                "COMPUTED dense provenance cannot reference a source chunk"
+            )
+        if dense_action == "REUSED" and dense_source_chunk_pk is None:
+            raise InvalidLineageStateError(
+                "REUSED dense provenance requires a source chunk"
+            )
         if self._session.get(IndexStateChunk, (index_state_id, chunk_pk)) is not None:
             raise LineageConflictError(
                 f"Index state {index_state_id} already contains chunk {chunk_pk}"
@@ -752,6 +875,26 @@ class LineageRepository:
         if state is None:
             raise LineageNotFoundError(f"Index state not found: {index_state_id}")
         return state
+
+    @staticmethod
+    def _ready_metadata(state: IndexState) -> IndexStateReadyMetadata:
+        return IndexStateReadyMetadata(
+            qdrant_collection=state.qdrant_collection,
+            embedding_dimension=state.embedding_dimension,
+            bm25_state=state.bm25_state,
+            bm25_state_hash=state.bm25_state_hash,
+            bm25_corpus_hash=state.bm25_corpus_hash,
+            index_configuration=state.index_configuration,
+            index_configuration_fingerprint=state.index_configuration_fingerprint,
+            document_count=state.document_count,
+            chunk_count=state.chunk_count,
+        )
+
+    @classmethod
+    def _require_transition_timestamp(cls, value: datetime | None) -> None:
+        if value is None:
+            raise InvalidLineageStateError("Index state transition requires a timestamp")
+        cls._require_aware_timestamp(value)
 
     @staticmethod
     def _require_running(run: IngestionRun) -> None:
