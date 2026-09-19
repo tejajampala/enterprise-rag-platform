@@ -263,6 +263,54 @@ the same current lineage chunk and independent of index generation, but separate
 databases may produce different point identities. This layer performs no repository access,
 Qdrant operation, embedding inference, BM25 fitting, index-state transition, or publication.
 
+Managed publication now orchestrates these completed components without changing their internal
+algorithms:
+
+```text
+ActiveChunkManifest
+        |
+        +--> BM25 generation plan
+        +--> dense generation plan
+                    |
+                    v
+          committed BUILDING index state
+                    |
+                    v
+              point preparation
+                    |
+                    v
+       immutable Qdrant generation collection
+                    |
+                    v
+             physical validation
+                    |
+                    v
+     atomic metadata + memberships + READY
+                    |
+                    v
+       atomic previous ACTIVE -> RETIRED
+              candidate READY -> ACTIVE
+```
+
+`ManagedIndexService` commits the BUILDING identity in a short corpus-row-locking transaction,
+then releases the lock before BM25 work, embedding, collection creation, upsert, and physical
+validation. The previous ACTIVE generation remains unchanged and usable throughout that work.
+After physical validation, all build metadata, point memberships, dense provenance, and the READY
+transition commit atomically. A second short locked transaction verifies the original ACTIVE
+baseline and target ingestion run before retiring the old generation and activating the candidate
+in one commit.
+
+Pre-READY failures mark the committed candidate FAILED in a separate transaction while preserving
+the original error. Deterministic activation conflicts mark a READY candidate FAILED; unexpected
+activation infrastructure/database errors leave it READY for a future retry. Failed, BUILDING,
+READY, and RETIRED physical collections are retained for diagnosis—automatic cleanup and
+retention are not implemented yet. A no-index-change health check verifies persisted BM25 and
+configuration identity plus collection shape and exact point count. Detecting externally replaced
+same-count points is intentionally deferred to a later repair/audit command.
+
+The publisher reads source lineage but never creates ingestion runs, document versions, or chunks,
+and never changes document observation/deletion state. Managed retrieval is not implemented yet.
+
 The managed Qdrant boundary stores only fully prepared generation data:
 
 ```text

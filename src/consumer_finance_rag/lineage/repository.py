@@ -20,6 +20,7 @@ from consumer_finance_rag.lineage.index_state import (
 from consumer_finance_rag.lineage.index_types import (
     ActiveDocumentVersion,
     DenseReuseCandidate,
+    PreparedIndexMembership,
     PreviousBM25GenerationState,
     PreviousDenseGenerationState,
 )
@@ -71,6 +72,16 @@ class LineageRepository:
         """Return a corpus by stable key, if present."""
 
         return self._session.scalar(select(Corpus).where(Corpus.corpus_key == corpus_key))
+
+    def lock_corpus(self, corpus_id: UUID) -> Corpus:
+        """Lock one corpus row for short generation-allocation/activation work."""
+
+        corpus = self._session.scalar(
+            select(Corpus).where(Corpus.corpus_id == corpus_id).with_for_update()
+        )
+        if corpus is None:
+            raise LineageNotFoundError(f"Corpus not found: {corpus_id}")
+        return corpus
 
     def create_corpus(self, corpus_key: str, qdrant_collection_prefix: str) -> Corpus:
         """Create a managed corpus without committing the caller's transaction."""
@@ -944,6 +955,99 @@ class LineageRepository:
         self._session.add(membership)
         self._session.flush()
         return membership
+
+    def record_index_state_chunks_batch(
+        self,
+        index_state_id: UUID,
+        memberships: Sequence[PreparedIndexMembership],
+    ) -> list[IndexStateChunk]:
+        """Persist one validated generation membership set with a single flush."""
+
+        state = self._require_index_state(index_state_id)
+        if state.status != "BUILDING":
+            raise InvalidLineageStateError(
+                f"Index state {index_state_id} is {state.status}, not BUILDING"
+            )
+        chunk_ids = [membership.chunk_pk for membership in memberships]
+        point_ids = [membership.qdrant_point_id for membership in memberships]
+        if len(set(chunk_ids)) != len(chunk_ids):
+            raise LineageConflictError("Batch contains duplicate current chunk IDs")
+        if len(set(point_ids)) != len(point_ids):
+            raise LineageConflictError("Batch contains duplicate Qdrant point IDs")
+        existing = self._session.scalar(
+            select(IndexStateChunk.index_state_id)
+            .where(IndexStateChunk.index_state_id == index_state_id)
+            .limit(1)
+        )
+        if existing is not None:
+            raise LineageConflictError(
+                f"Index state {index_state_id} already has chunk memberships"
+            )
+
+        source_ids = {
+            membership.dense_source_chunk_pk
+            for membership in memberships
+            if membership.dense_source_chunk_pk is not None
+        }
+        all_chunk_ids = set(chunk_ids) | source_ids
+        rows = self._session.execute(
+            select(LineageChunk.chunk_pk, LineageDocument.corpus_id)
+            .join(
+                DocumentVersion,
+                DocumentVersion.document_version_id
+                == LineageChunk.document_version_id,
+            )
+            .join(
+                LineageDocument,
+                LineageDocument.document_pk == DocumentVersion.document_pk,
+            )
+            .where(LineageChunk.chunk_pk.in_(all_chunk_ids))
+        ).all()
+        corpus_by_chunk = {chunk_pk: corpus_id for chunk_pk, corpus_id in rows}
+        missing = sorted(all_chunk_ids - set(corpus_by_chunk), key=str)
+        if missing:
+            raise LineageNotFoundError(
+                "Index membership references missing chunks: "
+                + ", ".join(map(str, missing))
+            )
+        wrong_corpus = sorted(
+            (
+                chunk_pk
+                for chunk_pk, corpus_id in corpus_by_chunk.items()
+                if corpus_id != state.corpus_id
+            ),
+            key=str,
+        )
+        if wrong_corpus:
+            raise InvalidLineageStateError(
+                "Index membership chunks belong to another corpus: "
+                + ", ".join(map(str, wrong_corpus))
+            )
+
+        records: list[IndexStateChunk] = []
+        for membership in memberships:
+            dense_action = membership.dense_action.value
+            self._require_domain_value("dense_action", dense_action, DENSE_ACTIONS)
+            if dense_action == "COMPUTED" and membership.dense_source_chunk_pk is not None:
+                raise InvalidLineageStateError(
+                    "COMPUTED dense provenance cannot reference a source chunk"
+                )
+            if dense_action == "REUSED" and membership.dense_source_chunk_pk is None:
+                raise InvalidLineageStateError(
+                    "REUSED dense provenance requires a source chunk"
+                )
+            records.append(
+                IndexStateChunk(
+                    index_state_id=index_state_id,
+                    chunk_pk=membership.chunk_pk,
+                    qdrant_point_id=membership.qdrant_point_id,
+                    dense_action=dense_action,
+                    dense_source_chunk_pk=membership.dense_source_chunk_pk,
+                )
+            )
+        self._session.add_all(records)
+        self._session.flush()
+        return records
 
     def find_reusable_chunk(
         self, corpus_id: UUID, chunk_hash: str
