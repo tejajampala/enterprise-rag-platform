@@ -16,6 +16,7 @@ from consumer_finance_rag.lineage.index_state import (
     validate_index_state_ready,
     validate_index_state_transition,
 )
+from consumer_finance_rag.lineage.index_types import ActiveDocumentVersion
 from consumer_finance_rag.lineage.models import (
     DENSE_ACTIONS,
     DOCUMENT_CHANGE_TYPES,
@@ -48,6 +49,10 @@ class LineageNotFoundError(LineageRepositoryError):
 
 class InvalidLineageStateError(LineageRepositoryError):
     """Raised when a requested state or transition is invalid."""
+
+
+class MissingActiveDocumentVersionError(InvalidLineageStateError):
+    """Raised when an ACTIVE logical document has no unambiguous latest version."""
 
 
 class LineageRepository:
@@ -253,6 +258,66 @@ class LineageRepository:
         )
         return list(self._session.execute(statement).tuples())
 
+    def list_active_latest_document_versions(
+        self, corpus_id: UUID
+    ) -> list[ActiveDocumentVersion]:
+        """Project ACTIVE documents and latest versions into immutable ordered values."""
+
+        rows = self.list_active_documents_with_latest_versions(corpus_id)
+        projected: list[ActiveDocumentVersion] = []
+        seen_documents: set[UUID] = set()
+        for document, version in rows:
+            if document.document_pk in seen_documents:
+                raise MissingActiveDocumentVersionError(
+                    "ACTIVE document has multiple rows for its maximum version number: "
+                    f"{document.document_pk}"
+                )
+            seen_documents.add(document.document_pk)
+            if version is None:
+                raise MissingActiveDocumentVersionError(
+                    f"ACTIVE document {document.document_pk} has no document version"
+                )
+            projected.append(
+                ActiveDocumentVersion(
+                    document_pk=document.document_pk,
+                    document_version_id=version.document_version_id,
+                    version_number=version.version_number,
+                    source_key=document.source_key,
+                    source_id=document.source_id,
+                    source_url=version.source_url,
+                    title=version.title,
+                    category=version.category,
+                    source_version=version.source_version,
+                    normalized_text=version.normalized_text,
+                    content_hash=version.content_hash,
+                    metadata_hash=version.metadata_hash,
+                    version_hash=version.version_hash,
+                    compatibility_document_id=version.compatibility_document_id,
+                )
+            )
+        return projected
+
+    def get_latest_successful_ingestion_run(
+        self, corpus_id: UUID
+    ) -> IngestionRun | None:
+        """Return the latest SUCCEEDED/NOOP run, ignoring later failed attempts."""
+
+        self._require_corpus(corpus_id)
+        return self._session.scalar(
+            select(IngestionRun)
+            .where(
+                IngestionRun.corpus_id == corpus_id,
+                IngestionRun.status.in_(FINISHED_INGESTION_STATUSES),
+                IngestionRun.completed_at.is_not(None),
+            )
+            .order_by(
+                IngestionRun.completed_at.desc(),
+                IngestionRun.started_at.desc(),
+                IngestionRun.run_id.desc(),
+            )
+            .limit(1)
+        )
+
     def create_document(
         self,
         corpus_id: UUID,
@@ -404,6 +469,27 @@ class LineageRepository:
                 .order_by(
                     LineageChunk.ordinal,
                     LineageChunk.chunking_fingerprint,
+                    LineageChunk.compatibility_chunk_id,
+                )
+            )
+        )
+
+    def list_chunks_for_version_and_fingerprint(
+        self,
+        document_version_id: UUID,
+        chunking_fingerprint: str,
+    ) -> list[LineageChunk]:
+        """List one immutable chunk derivation in canonical ordinal order."""
+
+        return list(
+            self._session.scalars(
+                select(LineageChunk)
+                .where(
+                    LineageChunk.document_version_id == document_version_id,
+                    LineageChunk.chunking_fingerprint == chunking_fingerprint,
+                )
+                .order_by(
+                    LineageChunk.ordinal,
                     LineageChunk.compatibility_chunk_id,
                 )
             )

@@ -125,6 +125,45 @@ This milestone does not create, retrieve, validate, or mutate Qdrant collections
 embedding inference; and does not activate a managed generation. The existing Phase 1 fixture and
 Phase 2 evaluation indexing/retrieval paths remain independent.
 
+The next managed-index input boundary resolves the exact active textual corpus before any index
+work begins:
+
+```text
+ACTIVE logical documents
+        |
+        v
+latest immutable DocumentVersion
+        |
+        v
+requested ParagraphChunker configuration/fingerprint
+        |
+        v
+validate existing derivation or transactionally materialize it
+        |
+        v
+ActiveChunkManifest
+        |
+        v
+future BM25 + dense embedding + Qdrant generation
+```
+
+`ChunkMaterializationService` reconstructs the existing domain `Document`, verifies normalized
+text against its persisted content hash, and uses the existing `ParagraphChunker`. A complete
+matching derivation is reused only after exact ordinal/ID/hash/text validation. An absent
+derivation is added inside the caller's transaction; a partial or drifted derivation fails the
+whole pass without rewriting immutable history. Changing chunk size or overlap therefore creates
+another derivation of the same `DocumentVersion`, not a new source-document version. Deleted
+logical documents remain historical and are excluded.
+
+The manifest orders documents by `source_key` and chunks by `source_key`, ordinal, then
+compatibility chunk ID. Its `active-chunk-manifest-v1` SHA-256 covers logical source/version and
+chunk identities, text, the requested chunking fingerprint, and the active source snapshot hash;
+database UUIDs and timestamps are excluded. The latest completed `SUCCEEDED`/`NOOP` ingestion run
+anchors successful lineage state while later failed attempts are ignored. The source hash is
+derived from the actual active latest versions (and must equal a latest authoritative run's stored
+snapshot), which also handles cumulative non-authoritative observations safely. This boundary
+still creates no index state, BM25 state, embedding, Qdrant collection, or generation publication.
+
 Fixture and evaluation indexes are deliberately distinct. `scripts/ingest.py --mode fixture`
 writes `consumer_finance_phase1` plus `data/index/bm25_state.json`.
 `scripts/ingest.py --mode evaluation` requires downloaded records and writes
