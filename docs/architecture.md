@@ -164,6 +164,41 @@ derived from the actual active latest versions (and must equal a latest authorit
 snapshot), which also handles cumulative non-authoritative observations safely. This boundary
 still creates no index state, BM25 state, embedding, Qdrant collection, or generation publication.
 
+BM25 preparation is the next pure planning boundary:
+
+```text
+ActiveChunkManifest
+        |
+        v
+plan_bm25_generation (BM25 planner)
+    |          |
+    v          v
+  REUSE      REFIT over every active chunk text
+    |          |
+    +----+-----+
+         v
+ verified complete BM25State
+         |
+         v
+ future managed Qdrant publisher
+```
+
+BM25 statistics are corpus-wide: vocabulary, document frequencies, indexed-document count, and
+average length depend on the complete ordered chunk-text sequence. The planner therefore reuses an
+ACTIVE generation's state only after validating its canonical state hash, corpus hash, persisted
+configuration fingerprint, chunk count, k1/b, implementation/tokenizer identities, and chunking
+fingerprint. Missing or internally contradictory ACTIVE state is treated as lineage corruption;
+it is not hidden by a refit. A first generation, text/membership/order change, chunking change, or
+BM25 compatibility change refits exactly once across all active chunks.
+
+Citation-only metadata changes can alter `ActiveChunkManifest.manifest_hash` while leaving the
+ordered text corpus unchanged, so title/category changes may reuse BM25. Embedding and HNSW-only
+configuration changes likewise do not affect BM25 state. `BM25State.document_count` counts chunks
+(the BM25 documents), not logical source documents. Its existing length-framed
+`bm25_corpus_hash` identifies the exact training text sequence and is deliberately distinct from
+the broader lineage/payload `ActiveChunkManifest.manifest_hash`. Planning produces no sparse
+vectors, index-state writes, Qdrant collection, or publication.
+
 Fixture and evaluation indexes are deliberately distinct. `scripts/ingest.py --mode fixture`
 writes `consumer_finance_phase1` plus `data/index/bm25_state.json`.
 `scripts/ingest.py --mode evaluation` requires downloaded records and writes

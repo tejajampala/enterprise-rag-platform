@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from copy import deepcopy
 from datetime import datetime
 from typing import Any
 from uuid import UUID
@@ -16,7 +17,10 @@ from consumer_finance_rag.lineage.index_state import (
     validate_index_state_ready,
     validate_index_state_transition,
 )
-from consumer_finance_rag.lineage.index_types import ActiveDocumentVersion
+from consumer_finance_rag.lineage.index_types import (
+    ActiveDocumentVersion,
+    PreviousBM25GenerationState,
+)
 from consumer_finance_rag.lineage.models import (
     DENSE_ACTIONS,
     DOCUMENT_CHANGE_TYPES,
@@ -617,6 +621,25 @@ class LineageRepository:
                 f"Corpus {corpus_id} has more than one ACTIVE index state"
             )
         return active[0] if active else None
+
+    def get_active_bm25_generation_state(
+        self, corpus_id: UUID
+    ) -> PreviousBM25GenerationState | None:
+        """Detach BM25/configuration fields from the optional ACTIVE generation."""
+
+        state = self.get_active_index_state(corpus_id)
+        if state is None:
+            return None
+        return PreviousBM25GenerationState(
+            index_state_id=state.index_state_id,
+            bm25_state=deepcopy(state.bm25_state),
+            bm25_state_hash=state.bm25_state_hash,
+            bm25_corpus_hash=state.bm25_corpus_hash,
+            index_configuration=deepcopy(state.index_configuration),
+            index_configuration_fingerprint=state.index_configuration_fingerprint,
+            chunking_fingerprint=state.chunking_fingerprint,
+            chunk_count=state.chunk_count,
+        )
 
     def get_index_state(self, index_state_id: UUID) -> IndexState | None:
         """Return one managed index generation, if present."""

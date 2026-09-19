@@ -457,6 +457,15 @@ def test_create_latest_and_active_index_state(repository: LineageRepository) -> 
     assert activated.status == "ACTIVE"
     assert first.status == "READY"
 
+    bm25_projection = repository.get_active_bm25_generation_state(corpus.corpus_id)
+    assert bm25_projection is not None
+    assert bm25_projection.index_state_id == second.index_state_id
+    assert bm25_projection.bm25_state == second.bm25_state
+    assert bm25_projection.bm25_state is not second.bm25_state
+    assert bm25_projection.bm25_corpus_hash == second.bm25_corpus_hash
+    assert bm25_projection.index_configuration == second.index_configuration
+    assert bm25_projection.chunk_count == second.chunk_count
+
 
 def test_building_index_state_can_be_incomplete_and_one_run_can_have_multiple(
     repository: LineageRepository,

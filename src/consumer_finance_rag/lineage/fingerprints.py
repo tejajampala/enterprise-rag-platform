@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
 from consumer_finance_rag.config import ManagedIndexSettings
@@ -96,6 +96,14 @@ def managed_index_configuration_identity(
         configuration=configuration,
         fingerprint=_canonical_fingerprint(configuration.canonical_payload()),
     )
+
+
+def managed_index_configuration_payload_fingerprint(
+    payload: Mapping[str, object],
+) -> str:
+    """Fingerprint a persisted canonical managed-index configuration payload."""
+
+    return _canonical_fingerprint(dict(payload))
 
 
 def managed_index_configuration_identity_from_settings(
