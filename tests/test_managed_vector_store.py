@@ -86,17 +86,42 @@ def active_chunk(index: int = 0) -> ActiveChunk:
 
 def prepared_point(index: int = 0, *, generation: int = 1) -> ManagedPointInput:
     chunk = active_chunk(index)
+    ingestion_run_id = UUID("30000000-0000-0000-0000-000000000001")
+    index_state_id = UUID(f"40000000-0000-0000-0000-{generation:012d}")
     return ManagedPointInput(
         chunk=chunk,
         qdrant_point_id=managed_point_id(chunk.chunk_pk),
         dense_vector=(1.0, float(index + 1), 0.5),
         sparse_indices=(index, index + 10),
         sparse_values=(0.25 + index, 0.75 + index),
-        ingestion_run_id=UUID("30000000-0000-0000-0000-000000000001"),
-        index_state_id=UUID(
-            f"40000000-0000-0000-0000-{generation:012d}"
-        ),
+        ingestion_run_id=ingestion_run_id,
+        index_state_id=index_state_id,
         index_generation=generation,
+        payload={
+            "document_id": chunk.compatibility_document_id,
+            "chunk_id": chunk.compatibility_chunk_id,
+            "document_version": chunk.source_version,
+            "title": chunk.title,
+            "category": chunk.category,
+            "source_url": chunk.source_url,
+            "source_id": chunk.source_id,
+            "source_key": chunk.source_key,
+            "chunk_hash": chunk.chunk_hash,
+            "ordinal": chunk.ordinal,
+            "text": chunk.text,
+            "content_hash": chunk.content_hash,
+            "source_version": chunk.source_version,
+            "lineage_document_pk": str(chunk.document_pk),
+            "lineage_document_version_id": str(chunk.document_version_id),
+            "lineage_chunk_pk": str(chunk.chunk_pk),
+            "lineage_version_number": chunk.version_number,
+            "ingestion_run_id": str(ingestion_run_id),
+            "index_generation": generation,
+            "index_state_id": str(index_state_id),
+            "chunking_fingerprint": chunk.chunking_fingerprint,
+            "point_id_format_version": "lineage-chunk-uuid5-v1",
+            "payload_schema_version": "managed-qdrant-payload-v1",
+        },
     )
 
 

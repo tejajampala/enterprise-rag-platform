@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import math
 import re
-import uuid
 from collections.abc import Mapping, Sequence
 from copy import deepcopy
 from typing import Any
@@ -26,8 +25,10 @@ from consumer_finance_rag.lineage.index_types import (
     RetrievedDenseVector,
     StoredSparseVector,
 )
+from consumer_finance_rag.lineage.index_types import (
+    managed_point_id as managed_point_id,
+)
 
-MANAGED_POINT_NAMESPACE = UUID("cc63cb7b-a905-5cf0-a0df-a6290ee69960")
 PROTECTED_COLLECTION_NAMES = frozenset(
     {"consumer_finance_phase1", "consumer_finance_evaluation"}
 )
@@ -72,15 +73,6 @@ def managed_generation_collection_name(prefix: str, generation: int) -> str:
             "Managed generation collection name exceeds 255 characters"
         )
     return name
-
-
-def managed_point_id(chunk_pk: UUID) -> UUID:
-    """Derive a stable generation-independent point ID from lineage chunk identity."""
-
-    return uuid.uuid5(
-        MANAGED_POINT_NAMESPACE,
-        f"{POINT_ID_FORMAT_VERSION}:{chunk_pk}",
-    )
 
 
 class ManagedQdrantStore:
@@ -389,7 +381,7 @@ class ManagedQdrantStore:
                     values=[float(value) for value in point.sparse_values],
                 ),
             },
-            payload=_point_payload(point, self._configuration),
+            payload=deepcopy(dict(point.payload)),
         )
 
     def _validate_point(self, point: ManagedPointInput, *, generation: int) -> None:
@@ -401,6 +393,11 @@ class ManagedQdrantStore:
             raise ManagedVectorValidationError(
                 f"Point generation {point.index_generation} does not match collection "
                 f"generation {generation}"
+            )
+        expected_payload = _point_payload(point, self._configuration)
+        if dict(point.payload) != expected_payload:
+            raise ManagedVectorValidationError(
+                "Prepared point payload does not match its current chunk/build identity"
             )
         _validate_dense_vector(point.dense_vector, self._embedding_dimension)
         _validate_sparse_vector(point.sparse_indices, point.sparse_values)
@@ -472,7 +469,7 @@ class ManagedQdrantStore:
         actual: ManagedStoredPoint,
     ) -> list[str]:
         issues: list[str] = []
-        expected_payload = _point_payload(expected, self._configuration)
+        expected_payload = expected.payload
         for key, value in expected_payload.items():
             if actual.payload.get(key) != value:
                 issues.append(

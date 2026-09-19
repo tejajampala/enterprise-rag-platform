@@ -234,6 +234,35 @@ surviving exact chunks after metadata or chunking changes, while BM25 statistics
 dependent and are reused or refitted as one whole-corpus decision. Dense planning performs no
 Qdrant mutation, database mutation, BM25 fitting, index-state transition, or publication.
 
+Point preparation combines the already completed plans without repeating their expensive work:
+
+```text
+ActiveChunkManifest + DenseGenerationPlan + BM25GenerationPlan
+                              |
+                              v
+                ManagedPointPreparation
+                              |
+                              v
+             complete immutable point inputs
+                              |
+                              v
+                future ManagedIndexService
+```
+
+The preparation layer validates that manifest, dense plan, BM25 plan, and generation identity all
+describe the same ordered active corpus. It constructs a `BM25SparseEncoder` from the selected
+state and encodes each current chunk exactly once; it never fits BM25 again and never copies old
+sparse vectors. Dense vectors are validated and passed through unchanged, without embedding calls
+or normalization. Every payload is built from the current `ActiveChunk`, so a metadata-only new
+version can reuse its old dense vector while receiving new citation metadata, lineage IDs, and a
+point ID derived from its new lineage chunk. Separate prepared membership records retain
+`REUSED`/`COMPUTED` provenance and the prior source chunk when applicable.
+
+Prepared point IDs legitimately incorporate database lineage UUIDs. They are deterministic for
+the same current lineage chunk and independent of index generation, but separately initialized
+databases may produce different point identities. This layer performs no repository access,
+Qdrant operation, embedding inference, BM25 fitting, index-state transition, or publication.
+
 The managed Qdrant boundary stores only fully prepared generation data:
 
 ```text

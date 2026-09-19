@@ -2,13 +2,29 @@
 
 from __future__ import annotations
 
+import uuid
 from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any
 from uuid import UUID
 
+from consumer_finance_rag.lineage.fingerprints import (
+    PAYLOAD_SCHEMA_VERSION,
+    POINT_ID_FORMAT_VERSION,
+)
 from consumer_finance_rag.sparse import BM25State
+
+MANAGED_POINT_NAMESPACE = UUID("cc63cb7b-a905-5cf0-a0df-a6290ee69960")
+
+
+def managed_point_id(chunk_pk: UUID) -> UUID:
+    """Derive the canonical generation-independent point ID for a lineage chunk."""
+
+    return uuid.uuid5(
+        MANAGED_POINT_NAMESPACE,
+        f"{POINT_ID_FORMAT_VERSION}:{chunk_pk}",
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -172,6 +188,20 @@ class DenseGenerationPlan:
 
 
 @dataclass(frozen=True, slots=True)
+class PreparedIndexIdentity:
+    """Detached build identity applied to every point in one future generation."""
+
+    ingestion_run_id: UUID
+    index_state_id: UUID
+    generation: int
+    chunking_fingerprint: str
+    embedding_fingerprint: str
+    embedding_dimension: int
+    point_id_format_version: str = POINT_ID_FORMAT_VERSION
+    payload_schema_version: str = PAYLOAD_SCHEMA_VERSION
+
+
+@dataclass(frozen=True, slots=True)
 class ManagedPointInput:
     """One fully prepared managed Qdrant point with no ORM or model provider state."""
 
@@ -183,6 +213,50 @@ class ManagedPointInput:
     ingestion_run_id: UUID
     index_state_id: UUID
     index_generation: int
+    payload: Mapping[str, Any]
+
+
+@dataclass(frozen=True, slots=True)
+class PreparedIndexMembership:
+    """Future index-state membership and dense-vector provenance for one point."""
+
+    chunk_pk: UUID
+    qdrant_point_id: UUID
+    dense_action: DensePlanAction
+    dense_source_chunk_pk: UUID | None
+
+
+@dataclass(frozen=True, slots=True)
+class PreparedManagedGeneration:
+    """Complete immutable point inputs for a future managed-index publisher."""
+
+    ingestion_run_id: UUID
+    index_state_id: UUID
+    generation: int
+    embedding_dimension: int
+    document_count: int
+    chunk_count: int
+    bm25_action: BM25PlanAction
+    points: tuple[ManagedPointInput, ...]
+    memberships: tuple[PreparedIndexMembership, ...]
+
+    @property
+    def reused_dense_count(self) -> int:
+        """Return how many prepared memberships reuse a prior dense vector."""
+
+        return sum(
+            membership.dense_action is DensePlanAction.REUSED
+            for membership in self.memberships
+        )
+
+    @property
+    def computed_dense_count(self) -> int:
+        """Return how many prepared memberships contain a newly computed vector."""
+
+        return sum(
+            membership.dense_action is DensePlanAction.COMPUTED
+            for membership in self.memberships
+        )
 
 
 @dataclass(frozen=True, slots=True)
