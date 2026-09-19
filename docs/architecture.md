@@ -199,6 +199,41 @@ configuration changes likewise do not affect BM25 state. `BM25State.document_cou
 the broader lineage/payload `ActiveChunkManifest.manifest_hash`. Planning produces no sparse
 vectors, index-state writes, Qdrant collection, or publication.
 
+Dense-vector generation is a separate read-only plan:
+
+```text
+ActiveChunkManifest + previous ACTIVE generation
+                         |
+                         v
+              DenseGenerationPlanner
+                         |
+                         v
+               exact reuse validation
+                         |
+                         v
+                  REUSED / COMPUTED
+                         |
+                         v
+        complete prepared dense-vector plan
+                         |
+                         v
+                 future publisher
+```
+
+Dense reuse is per chunk because an embedding is dependent on exact text and the complete
+embedding fingerprint, not on the rest of the corpus. The planner considers only memberships in
+the supplied previous ACTIVE generation, chooses duplicate exact-text candidates deterministically,
+and reads their stored Qdrant point IDs in bounded batches. It reuses a vector only after checking
+the returned point/payload lineage, hash, exact text, dimension, and finite values. A missing or
+unusable individual old point is recomputed; a Qdrant read failure aborts planning. New embeddings
+are requested once for only the non-reused texts. The plan preserves manifest order and records
+the prior chunk and point provenance for every reuse.
+
+This differs deliberately from BM25: dense vectors are text/model dependent and can be reused for
+surviving exact chunks after metadata or chunking changes, while BM25 statistics are corpus
+dependent and are reused or refitted as one whole-corpus decision. Dense planning performs no
+Qdrant mutation, database mutation, BM25 fitting, index-state transition, or publication.
+
 The managed Qdrant boundary stores only fully prepared generation data:
 
 ```text

@@ -6,7 +6,7 @@ from typing import Any
 from uuid import UUID, uuid4
 
 import pytest
-from sqlalchemy import Engine, create_engine, event, select
+from sqlalchemy import Engine, create_engine, event, func, select
 from sqlalchemy.orm import Session
 
 from consumer_finance_rag.lineage.models import (
@@ -14,7 +14,9 @@ from consumer_finance_rag.lineage.models import (
     Corpus,
     DocumentVersion,
     IndexState,
+    IndexStateChunk,
     IngestionRun,
+    LineageChunk,
     LineageDocument,
 )
 from consumer_finance_rag.lineage.repository import (
@@ -176,6 +178,100 @@ def test_get_or_create_corpus_rejects_conflicting_prefix(
 
     with pytest.raises(LineageConflictError, match="already uses Qdrant prefix"):
         repository.get_or_create_corpus("consumer-finance-managed", "different-prefix")
+
+
+def test_active_dense_projection_and_batched_reuse_candidates_are_detached_and_read_only(
+    repository: LineageRepository,
+    session: Session,
+) -> None:
+    corpus, run, _document, version = create_document_and_version(
+        repository, suffix="dense-reuse"
+    )
+    shared_hash = hash_value(555)
+    chunks = repository.create_chunks(
+        version.document_version_id,
+        (
+            chunk_input(0, chunk_hash=shared_hash),
+            chunk_input(1, chunk_hash=shared_hash),
+            chunk_input(2),
+        ),
+    )
+    active = create_index_state(
+        repository,
+        corpus,
+        run.run_id,
+        generation=1,
+        status="ACTIVE",
+    )
+    active.index_configuration = {"dense": {"vector_name": "managed_dense"}}
+    first_point = uuid4()
+    second_point = uuid4()
+    repository.record_index_state_chunk(
+        active.index_state_id, chunks[0].chunk_pk, first_point, "COMPUTED"
+    )
+    repository.record_index_state_chunk(
+        active.index_state_id, chunks[1].chunk_pk, second_point, "COMPUTED"
+    )
+    building = create_index_state(
+        repository,
+        corpus,
+        run.run_id,
+        generation=2,
+        status="BUILDING",
+    )
+    repository.record_index_state_chunk(
+        building.index_state_id, chunks[2].chunk_pk, uuid4(), "COMPUTED"
+    )
+    session.flush()
+    before = (
+        session.scalar(select(func.count()).select_from(IndexStateChunk)),
+        session.scalar(select(func.count()).select_from(LineageChunk)),
+    )
+
+    projection = repository.get_active_dense_generation_state(corpus.corpus_id)
+    candidates = repository.find_reuse_candidates_for_hashes(
+        active.index_state_id,
+        (shared_hash, shared_hash, chunks[2].chunk_hash),
+    )
+
+    assert projection is not None
+    assert projection.index_state_id == active.index_state_id
+    assert projection.qdrant_collection == active.qdrant_collection
+    assert projection.embedding_dimension == 1024
+    assert projection.dense_vector_name == "managed_dense"
+    assert [item.previous_chunk_pk for item in candidates] == [
+        chunks[0].chunk_pk,
+        chunks[1].chunk_pk,
+    ]
+    assert [item.qdrant_point_id for item in candidates] == [
+        first_point,
+        second_point,
+    ]
+    assert (
+        session.scalar(select(func.count()).select_from(IndexStateChunk)),
+        session.scalar(select(func.count()).select_from(LineageChunk)),
+    ) == before
+    assert not session.new
+    assert not session.dirty
+
+
+def test_reuse_candidate_query_rejects_non_active_generation(
+    repository: LineageRepository,
+) -> None:
+    corpus, run = create_corpus_and_run(repository, "dense-building")
+    building = create_index_state(
+        repository,
+        corpus,
+        run.run_id,
+        generation=1,
+        status="BUILDING",
+    )
+
+    with pytest.raises(InvalidLineageStateError, match="not ACTIVE"):
+        repository.find_reuse_candidates_for_hashes(
+            building.index_state_id,
+            (hash_value(1),),
+        )
 
 
 def test_start_and_finish_ingestion_run_with_counts(

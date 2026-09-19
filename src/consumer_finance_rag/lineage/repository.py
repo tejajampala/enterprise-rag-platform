@@ -19,7 +19,9 @@ from consumer_finance_rag.lineage.index_state import (
 )
 from consumer_finance_rag.lineage.index_types import (
     ActiveDocumentVersion,
+    DenseReuseCandidate,
     PreviousBM25GenerationState,
+    PreviousDenseGenerationState,
 )
 from consumer_finance_rag.lineage.models import (
     DENSE_ACTIONS,
@@ -641,6 +643,31 @@ class LineageRepository:
             chunk_count=state.chunk_count,
         )
 
+    def get_active_dense_generation_state(
+        self, corpus_id: UUID
+    ) -> PreviousDenseGenerationState | None:
+        """Detach dense-vector identity from the optional ACTIVE generation."""
+
+        state = self.get_active_index_state(corpus_id)
+        if state is None:
+            return None
+        dense_vector_name: str | None = None
+        configuration = state.index_configuration
+        if isinstance(configuration, Mapping):
+            dense = configuration.get("dense")
+            if isinstance(dense, Mapping):
+                candidate_name = dense.get("vector_name")
+                if isinstance(candidate_name, str):
+                    dense_vector_name = candidate_name
+        return PreviousDenseGenerationState(
+            index_state_id=state.index_state_id,
+            qdrant_collection=state.qdrant_collection,
+            embedding_fingerprint=state.embedding_fingerprint,
+            embedding_dimension=state.embedding_dimension,
+            dense_vector_name=dense_vector_name,
+            generation=state.generation,
+        )
+
     def get_index_state(self, index_state_id: UUID) -> IndexState | None:
         """Return one managed index generation, if present."""
 
@@ -945,6 +972,51 @@ class LineageRepository:
                     LineageChunk.chunk_pk,
                 )
             )
+        )
+
+    def find_reuse_candidates_for_hashes(
+        self,
+        index_state_id: UUID,
+        chunk_hashes: Sequence[str],
+    ) -> list[DenseReuseCandidate]:
+        """Read exact-hash candidates belonging only to one ACTIVE generation."""
+
+        state = self._require_index_state(index_state_id)
+        if state.status != "ACTIVE":
+            raise InvalidLineageStateError(
+                f"Dense reuse source {index_state_id} is {state.status}, not ACTIVE"
+            )
+        hashes = tuple(sorted(set(chunk_hashes)))
+        if not hashes:
+            return []
+        rows = self._session.execute(
+            select(LineageChunk, IndexStateChunk.qdrant_point_id)
+            .join(
+                IndexStateChunk,
+                IndexStateChunk.chunk_pk == LineageChunk.chunk_pk,
+            )
+            .where(
+                IndexStateChunk.index_state_id == index_state_id,
+                LineageChunk.chunk_hash.in_(hashes),
+            )
+        ).all()
+        candidates = [
+            DenseReuseCandidate(
+                previous_chunk_pk=chunk.chunk_pk,
+                chunk_hash=chunk.chunk_hash,
+                text=chunk.text,
+                qdrant_point_id=point_id,
+                compatibility_chunk_id=chunk.compatibility_chunk_id,
+            )
+            for chunk, point_id in rows
+        ]
+        return sorted(
+            candidates,
+            key=lambda candidate: (
+                candidate.chunk_hash,
+                candidate.compatibility_chunk_id,
+                str(candidate.previous_chunk_pk),
+            ),
         )
 
     def _require_corpus(self, corpus_id: UUID) -> Corpus:

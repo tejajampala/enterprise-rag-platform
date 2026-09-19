@@ -282,6 +282,40 @@ def test_retrieve_dense_vector_and_payload_identity_are_detached(
     assert record.compatibility_chunk_id == first.chunk.compatibility_chunk_id
 
 
+def test_retrieve_dense_vectors_reports_one_unusable_returned_point(
+    client: QdrantClient,
+    store: ManagedQdrantStore,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    name = store.collection_name(1)
+    store.create_generation_collection(name)
+    point_id = uuid4()
+    monkeypatch.setattr(
+        client,
+        "retrieve",
+        lambda **_kwargs: [
+            models.Record(
+                id=str(point_id),
+                payload={
+                    "lineage_chunk_pk": str(uuid4()),
+                    "chunk_hash": "a" * 64,
+                    "text": "Reusable text",
+                    "chunk_id": "chunk-1",
+                },
+                vector={},
+            )
+        ],
+    )
+
+    result = store.retrieve_dense_vectors(name, [point_id])
+
+    assert result.records == ()
+    assert result.missing_point_ids == ()
+    assert len(result.issues) == 1
+    assert result.issues[0].point_id == point_id
+    assert "missing" in result.issues[0].reason
+
+
 def test_scroll_all_points_follows_pagination_and_returns_both_vectors(
     store: ManagedQdrantStore,
 ) -> None:

@@ -17,6 +17,7 @@ from consumer_finance_rag.lineage.fingerprints import (
     ManagedIndexConfiguration,
 )
 from consumer_finance_rag.lineage.index_types import (
+    DenseVectorRetrievalIssue,
     DenseVectorRetrievalResult,
     ManagedCollectionMetadata,
     ManagedCollectionValidationResult,
@@ -204,28 +205,34 @@ class ManagedQdrantStore:
             with_vectors=[self._configuration.dense_vector_name],
         )
         detached: list[RetrievedDenseVector] = []
+        issues: list[DenseVectorRetrievalIssue] = []
         returned_ids: set[UUID] = set()
         for record in records:
             point_id = _as_uuid(record.id, "Qdrant point ID")
             returned_ids.add(point_id)
             payload = record.payload or {}
-            dense = _named_dense_vector(
-                record.vector,
-                self._configuration.dense_vector_name,
-                self._embedding_dimension,
-            )
-            detached.append(
-                RetrievedDenseVector(
-                    point_id=point_id,
-                    dense_vector=dense,
-                    lineage_chunk_pk=_as_uuid(
-                        payload.get("lineage_chunk_pk"), "lineage_chunk_pk"
-                    ),
-                    chunk_hash=_payload_string(payload, "chunk_hash"),
-                    text=_payload_string(payload, "text"),
-                    compatibility_chunk_id=_payload_string(payload, "chunk_id"),
+            try:
+                dense = _named_dense_vector(
+                    record.vector,
+                    self._configuration.dense_vector_name,
+                    self._embedding_dimension,
                 )
-            )
+                detached.append(
+                    RetrievedDenseVector(
+                        point_id=point_id,
+                        dense_vector=dense,
+                        lineage_chunk_pk=_as_uuid(
+                            payload.get("lineage_chunk_pk"), "lineage_chunk_pk"
+                        ),
+                        chunk_hash=_payload_string(payload, "chunk_hash"),
+                        text=_payload_string(payload, "text"),
+                        compatibility_chunk_id=_payload_string(payload, "chunk_id"),
+                    )
+                )
+            except (ManagedVectorValidationError, TypeError, ValueError) as exc:
+                issues.append(
+                    DenseVectorRetrievalIssue(point_id=point_id, reason=str(exc))
+                )
         detached.sort(key=lambda item: str(item.point_id))
         missing = tuple(
             sorted(
@@ -236,6 +243,7 @@ class ManagedQdrantStore:
         return DenseVectorRetrievalResult(
             records=tuple(detached),
             missing_point_ids=missing,
+            issues=tuple(sorted(issues, key=lambda item: str(item.point_id))),
         )
 
     def scroll_all_points(

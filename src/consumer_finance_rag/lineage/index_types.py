@@ -106,6 +106,71 @@ class BM25GenerationPlan:
     ordered_chunk_ids: tuple[str, ...]
 
 
+class DensePlanAction(StrEnum):
+    """How one current chunk obtains its dense vector."""
+
+    REUSED = "REUSED"
+    COMPUTED = "COMPUTED"
+
+
+@dataclass(frozen=True, slots=True)
+class PreviousDenseGenerationState:
+    """Detached dense-vector facts from the optional ACTIVE generation."""
+
+    index_state_id: UUID
+    qdrant_collection: str
+    embedding_fingerprint: str
+    embedding_dimension: int | None
+    dense_vector_name: str | None
+    generation: int
+
+
+@dataclass(frozen=True, slots=True)
+class DenseReuseCandidate:
+    """Prior ACTIVE membership eligible for exact-content physical validation."""
+
+    previous_chunk_pk: UUID
+    chunk_hash: str
+    text: str
+    qdrant_point_id: UUID
+    compatibility_chunk_id: str
+
+
+@dataclass(frozen=True, slots=True)
+class PreparedDenseChunk:
+    """One immutable current-chunk vector plus its reuse provenance."""
+
+    lineage_chunk_pk: UUID
+    compatibility_chunk_id: str
+    chunk_hash: str
+    action: DensePlanAction
+    dense_vector: tuple[float, ...]
+    dense_source_chunk_pk: UUID | None
+    dense_source_point_id: UUID | None
+    reason: str
+
+
+@dataclass(frozen=True, slots=True)
+class DenseGenerationPlan:
+    """Complete dense-vector plan in exact active-manifest order."""
+
+    embedding_fingerprint: str
+    embedding_dimension: int
+    chunks: tuple[PreparedDenseChunk, ...]
+
+    @property
+    def reused_count(self) -> int:
+        """Return the number of entries copied from the prior ACTIVE generation."""
+
+        return sum(chunk.action is DensePlanAction.REUSED for chunk in self.chunks)
+
+    @property
+    def computed_count(self) -> int:
+        """Return the number of entries produced by the embedding provider."""
+
+        return sum(chunk.action is DensePlanAction.COMPUTED for chunk in self.chunks)
+
+
 @dataclass(frozen=True, slots=True)
 class ManagedPointInput:
     """One fully prepared managed Qdrant point with no ORM or model provider state."""
@@ -151,11 +216,20 @@ class RetrievedDenseVector:
 
 
 @dataclass(frozen=True, slots=True)
+class DenseVectorRetrievalIssue:
+    """One returned Qdrant point that could not provide a reusable dense record."""
+
+    point_id: UUID
+    reason: str
+
+
+@dataclass(frozen=True, slots=True)
 class DenseVectorRetrievalResult:
     """Requested dense-vector records plus explicit missing point identities."""
 
     records: tuple[RetrievedDenseVector, ...]
     missing_point_ids: tuple[UUID, ...]
+    issues: tuple[DenseVectorRetrievalIssue, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
