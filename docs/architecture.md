@@ -199,6 +199,36 @@ configuration changes likewise do not affect BM25 state. `BM25State.document_cou
 the broader lineage/payload `ActiveChunkManifest.manifest_hash`. Planning produces no sparse
 vectors, index-state writes, Qdrant collection, or publication.
 
+The managed Qdrant boundary stores only fully prepared generation data:
+
+```text
+ActiveChunkManifest + prepared dense vectors + prepared sparse vectors
+                              |
+                              v
+                     ManagedQdrantStore
+                              |
+                              v
+               immutable generation collection
+                              |
+                              v
+                    physical validation
+```
+
+Generation collection names are derived from the registered prefix and generation, such as
+`consumer_finance_managed_g000001`. Creation is non-destructive: an existing collection is a
+collision error and is never deleted or recreated automatically. The Phase 1 fixture and Phase 2
+evaluation collection names are explicitly protected. Managed point IDs use versioned UUID5
+identity (`lineage-chunk-uuid5-v1`) derived from the lineage chunk primary key, so the same chunk
+has the same point ID in separate physical generations.
+
+The adapter validates already-prepared dense and sparse values, writes deterministic batches with
+Qdrant acknowledgement, and exposes bounded dense retrieval, paginated inspection, exact count,
+and physical validation. Validation checks collection vector configuration, point identity and
+payload, dense presence/dimension/finiteness, and sparse identity/weights using explicit
+float32-appropriate tolerances. The adapter does not fit BM25, call embedding providers, decide
+dense reuse, create or transition PostgreSQL index states, or activate a generation. Full managed
+publishing orchestration remains unimplemented.
+
 Fixture and evaluation indexes are deliberately distinct. `scripts/ingest.py --mode fixture`
 writes `consumer_finance_phase1` plus `data/index/bm25_state.json`.
 `scripts/ingest.py --mode evaluation` requires downloaded records and writes

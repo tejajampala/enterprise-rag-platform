@@ -104,3 +104,79 @@ class BM25GenerationPlan:
     bm25_b: float
     reason: str
     ordered_chunk_ids: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class ManagedPointInput:
+    """One fully prepared managed Qdrant point with no ORM or model provider state."""
+
+    chunk: ActiveChunk
+    qdrant_point_id: UUID
+    dense_vector: tuple[float, ...]
+    sparse_indices: tuple[int, ...]
+    sparse_values: tuple[float, ...]
+    ingestion_run_id: UUID
+    index_state_id: UUID
+    index_generation: int
+
+
+@dataclass(frozen=True, slots=True)
+class StoredSparseVector:
+    """Detached sparse vector returned by physical Qdrant inspection."""
+
+    indices: tuple[int, ...]
+    values: tuple[float, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class ManagedStoredPoint:
+    """Detached Qdrant point used for inspection and physical validation."""
+
+    point_id: UUID
+    payload: Mapping[str, Any]
+    dense_vector: tuple[float, ...] | None
+    sparse_vector: StoredSparseVector | None
+
+
+@dataclass(frozen=True, slots=True)
+class RetrievedDenseVector:
+    """Dense-vector reuse input detached from Qdrant SDK classes."""
+
+    point_id: UUID
+    dense_vector: tuple[float, ...]
+    lineage_chunk_pk: UUID
+    chunk_hash: str
+    text: str
+    compatibility_chunk_id: str
+
+
+@dataclass(frozen=True, slots=True)
+class DenseVectorRetrievalResult:
+    """Requested dense-vector records plus explicit missing point identities."""
+
+    records: tuple[RetrievedDenseVector, ...]
+    missing_point_ids: tuple[UUID, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class ManagedCollectionMetadata:
+    """Detached physical collection configuration relevant to managed validation."""
+
+    collection_name: str
+    dense_vector_names: tuple[str, ...]
+    sparse_vector_names: tuple[str, ...]
+    dense_dimension: int | None
+    distance_metric: str | None
+    hnsw_m: int | None
+    hnsw_ef_construct: int | None
+    sparse_modifier: str | None
+    sparse_on_disk: bool | None
+
+
+@dataclass(frozen=True, slots=True)
+class ManagedCollectionValidationResult:
+    """Successful physical integrity result for an immutable generation collection."""
+
+    collection_name: str
+    point_count: int
+    point_ids: tuple[UUID, ...]
