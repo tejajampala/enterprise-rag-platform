@@ -107,6 +107,7 @@ class RetrievalSettings(BaseModel):
     fused_candidates: int = Field(default=12, gt=0)
     final_contexts: int = Field(default=5, gt=0)
     rrf_k: int = Field(default=60, gt=0)
+    hnsw_ef: int | None = Field(default=None, gt=0)
 
 
 class ContextSettings(BaseModel):

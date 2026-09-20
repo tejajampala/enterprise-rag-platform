@@ -43,6 +43,7 @@ def test_configuration_loads_yaml_and_standard_environment_aliases(
     assert settings.aws.total_max_attempts == 3
     assert settings.aws.tcp_keepalive is True
     assert settings.retrieval.dense_candidates == 9
+    assert settings.retrieval.hnsw_ef is None
     assert settings.qdrant.collection_name == "environment-collection"
     assert settings.evaluation.qdrant_collection_name == "consumer_finance_evaluation"
     assert settings.evaluation.bm25_state_path == Path("data/index/evaluation_bm25_state.json")
@@ -119,3 +120,16 @@ def test_managed_index_settings_are_typed_and_environment_configurable(
 
     assert overridden.managed_index.hnsw_m == 32
     assert overridden.managed_index.bm25_k1 == 1.5
+
+
+def test_query_hnsw_ef_is_optional_and_environment_configurable(
+    tmp_path: Path, monkeypatch: MonkeyPatch
+) -> None:
+    path = tmp_path / "config.yaml"
+    path.write_text(CONFIG, encoding="utf-8")
+
+    assert load_settings(path).retrieval.hnsw_ef is None
+
+    monkeypatch.setenv("RAG__RETRIEVAL__HNSW_EF", "80")
+
+    assert load_settings(path).retrieval.hnsw_ef == 80

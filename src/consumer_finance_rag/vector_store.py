@@ -18,9 +18,16 @@ POINT_NAMESPACE = uuid.UUID("73cf7db2-c6f4-43f0-b68d-6af773734caf")
 class QdrantHybridStore:
     """One Qdrant collection with HNSW dense and sparse BM25 named vectors."""
 
-    def __init__(self, settings: QdrantSettings, client: QdrantClient | None = None) -> None:
+    def __init__(
+        self,
+        settings: QdrantSettings,
+        client: QdrantClient | None = None,
+        *,
+        query_hnsw_ef: int | None = None,
+    ) -> None:
         self.settings = settings
         self.client = client or QdrantClient(url=settings.url)
+        self.query_hnsw_ef = query_hnsw_ef
 
     def recreate_collection(self, dense_size: int) -> None:
         """Create a fresh development collection.
@@ -95,7 +102,10 @@ class QdrantHybridStore:
             using=self.settings.dense_vector_name,
             limit=limit,
             with_payload=True,
-            search_params=models.SearchParams(hnsw_ef=max(limit * 2, 32), exact=False),
+            search_params=models.SearchParams(
+                hnsw_ef=self.query_hnsw_ef or max(limit * 2, 32),
+                exact=False,
+            ),
         )
         return self._to_retrieved(result.points, rank_kind="dense")
 

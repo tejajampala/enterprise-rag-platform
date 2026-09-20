@@ -309,7 +309,7 @@ configuration identity plus collection shape and exact point count. Detecting ex
 same-count points is intentionally deferred to a later repair/audit command.
 
 The publisher reads source lineage but never creates ingestion runs, document versions, or chunks,
-and never changes document observation/deletion state. Managed retrieval is not implemented yet.
+and never changes document observation/deletion state.
 
 The operator boundary is intentionally a separate command from source ingestion:
 
@@ -342,6 +342,38 @@ dimension-aware `ManagedQdrantStore` factory from the configured Qdrant URL. It 
 dense-reuse, point-preparation, upsert, or activation algorithm. Repeating the command against
 unchanged lineage/configuration returns `NO_INDEX_CHANGE`; older immutable generations are
 retained. Runtime/Streamlit retrieval still does not resolve the managed ACTIVE generation.
+
+Managed retrieval resolution is a separate, explicit factory boundary:
+
+```text
+PostgreSQL activation authority
+        |
+        v
+exactly one ACTIVE index_state
+        |
+        +--> qdrant_collection + dense/sparse vector names
+        +--> persisted BM25 state from the same row
+        +--> immutable build configuration/fingerprints
+        v
+ManagedRetrievalRuntime
+        |
+        v
+existing HybridRetrievalService
+```
+
+`build_managed_retrieval_runtime()` validates the canonical BM25/configuration hashes, embedding
+compatibility, registered generation collection name, vector names, dense dimension, distance,
+and exact point count before returning a runtime. It reconstructs `BM25SparseEncoder` directly
+from the ACTIVE row; it never reads Phase 1/2 BM25 files, fits BM25, generates document vectors,
+or mutates PostgreSQL/Qdrant. The configured reranker, candidate depths, final-context depth, RRF
+K, and optional query-time HNSW `ef` remain query-time choices and do not alter the immutable index
+fingerprint.
+
+Resolution is process-lifetime pinned: a runtime built for `g000003` keeps both that collection and
+its matching BM25 encoder even if `g000004` is activated later. A process restart or future
+explicit reload must rebuild the complete runtime; collection names are never hot-swapped alone.
+The default factory, Phase 1/2 retrieval paths, and Streamlit remain unchanged and are not yet
+wired to managed retrieval.
 
 The managed Qdrant boundary stores only fully prepared generation data:
 

@@ -63,6 +63,7 @@ retrieval:
   fused_candidates: 12
   final_contexts: 5
   rrf_k: 60
+  hnsw_ef: null
 
 context:
   max_characters: 12000
