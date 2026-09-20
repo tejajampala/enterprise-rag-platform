@@ -177,6 +177,28 @@ transaction fails, it is rolled back and the run is marked `FAILED` in a separat
 Concurrent-apply locking is deferred. Neither mode updates Qdrant, embeddings, or BM25, so an apply
 must not be interpreted as a retrieval-index update.
 
+Publish the persisted lineage into an immutable managed hybrid-index generation as a separate,
+explicit operator step:
+
+```bash
+uv run python scripts/ingest_incremental.py --mode evaluation --authoritative-snapshot --apply
+uv run python scripts/index_managed.py --publish
+```
+
+The first command acquires/assembles the configured corpus and persists source lineage. The second
+command does not reacquire sources: it resolves the latest successful/no-op lineage run,
+transactionally materializes the configured active chunk derivation, commits that transaction,
+and then delegates publication to `ManagedIndexService`. Running `scripts/index_managed.py`
+without `--publish` is a cheap, read-only PostgreSQL status check; `--details` adds persisted
+identity/count information without contacting Qdrant or loading the embedding model.
+
+Publication creates a new immutable managed Qdrant generation only when lineage or index
+configuration requires it. Repeating publication with unchanged lineage/configuration returns
+`NO_INDEX_CHANGE`. Older physical generations are retained; cleanup, rollback, repair, and
+retention workflows are not implemented. Managed retrieval is not yet wired to Streamlit or the
+application runtime, so Phase 1 fixture and Phase 2 evaluation traffic continue to use their
+existing collections.
+
 ### Debug retrieval
 
 The developer CLI calls the production retrieval service but never Bedrock:
@@ -293,11 +315,12 @@ repeatable. Production/online evaluation observes real traffic and feedback unde
 operational controls. Phase 2 implements offline experiments and production-path traces but does
 not claim production monitoring, quality gains, or release thresholds.
 
-Phase 3 currently provides the application PostgreSQL schema, deterministic planning, and
-transactional lineage/version persistence. Managed Qdrant/BM25 indexing, restoration, concurrent
-apply locking, ACLs, PII handling, production deployment, and formal CI regression gates remain
-future work. Kafka, Airflow, Kubernetes, Supabase, OpenSearch, and additional orchestration
-frameworks remain out of scope.
+Phase 3 currently provides the application PostgreSQL schema, deterministic planning,
+transactional lineage/version persistence, and an explicit immutable managed-index publisher.
+Managed runtime retrieval, restoration, concurrent apply locking, cleanup/retention, ACLs, PII
+handling, production deployment, and formal CI regression gates remain future work. Kafka,
+Airflow, Kubernetes, Supabase, OpenSearch, and additional orchestration frameworks remain out of
+scope.
 
 See [architecture details](docs/architecture.md) and the
 [Phase 2 interview notes](docs/phase2-interview-notes.md). The first expanded-corpus run and its

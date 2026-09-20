@@ -311,6 +311,38 @@ same-count points is intentionally deferred to a later repair/audit command.
 The publisher reads source lineage but never creates ingestion runs, document versions, or chunks,
 and never changes document observation/deletion state. Managed retrieval is not implemented yet.
 
+The operator boundary is intentionally a separate command from source ingestion:
+
+```text
+scripts/ingest_incremental.py --apply
+        |
+        v
+persisted latest SUCCEEDED/NOOP lineage
+        |
+        v
+scripts/index_managed.py --publish
+        |
+        +--> transaction: materialize/validate active chunks -> COMMIT
+        |
+        +--> ManagedIndexService.publish(manifest, target_run_id)
+        v
+PUBLISHED or NO_INDEX_CHANGE
+```
+
+`scripts/index_managed.py` without `--publish` reads only the configured managed corpus, latest
+successful/no-op lineage run, active logical-document count, and optional ACTIVE index identity.
+It does not materialize alternate chunks, construct the embedding provider, fit BM25, or access
+Qdrant. Publish mode uses the existing repository run-resolution contract, so a later `FAILED`
+ingestion attempt cannot become the index target. The materialization transaction is committed
+before embedding inference or any Qdrant operation; the publisher then owns its established short
+BUILDING, READY, and activation transactions.
+
+The CLI constructs the existing lazy `HuggingFaceEmbeddingProvider` from model settings and a
+dimension-aware `ManagedQdrantStore` factory from the configured Qdrant URL. It contains no BM25,
+dense-reuse, point-preparation, upsert, or activation algorithm. Repeating the command against
+unchanged lineage/configuration returns `NO_INDEX_CHANGE`; older immutable generations are
+retained. Runtime/Streamlit retrieval still does not resolve the managed ACTIVE generation.
+
 The managed Qdrant boundary stores only fully prepared generation data:
 
 ```text
