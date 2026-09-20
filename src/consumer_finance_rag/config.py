@@ -58,6 +58,12 @@ class DatabaseSettings(BaseModel):
         return value
 
 
+class RuntimeSettings(BaseModel):
+    """Explicit retrieval backend selected for the application process."""
+
+    profile: Literal["fixture", "evaluation", "managed"] = "fixture"
+
+
 class ManagedIngestionSettings(BaseModel):
     """Identity for the independently managed Phase 3 corpus."""
 
@@ -161,6 +167,7 @@ class AppSettings(BaseSettings):
     models: ModelsSettings
     aws: AWSSettings = AWSSettings()
     database: DatabaseSettings = DatabaseSettings()
+    runtime: RuntimeSettings = RuntimeSettings()
     managed_ingestion: ManagedIngestionSettings = ManagedIngestionSettings()
     managed_index: ManagedIndexSettings = ManagedIndexSettings()
     qdrant: QdrantSettings = QdrantSettings()

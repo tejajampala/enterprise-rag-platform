@@ -195,9 +195,36 @@ identity/count information without contacting Qdrant or loading the embedding mo
 Publication creates a new immutable managed Qdrant generation only when lineage or index
 configuration requires it. Repeating publication with unchanged lineage/configuration returns
 `NO_INDEX_CHANGE`. Older physical generations are retained; cleanup, rollback, repair, and
-retention workflows are not implemented. Managed retrieval is not yet wired to Streamlit or the
-application runtime, so Phase 1 fixture and Phase 2 evaluation traffic continue to use their
-existing collections.
+retention workflows are not implemented.
+
+### Select the runtime retrieval profile
+
+The application profile is explicit and defaults to the existing Phase 1 fixture path. Set one of
+these values in `.env`, then start Streamlit normally:
+
+```dotenv
+RAG__RUNTIME__PROFILE=fixture
+```
+
+```dotenv
+RAG__RUNTIME__PROFILE=evaluation
+```
+
+```dotenv
+RAG__RUNTIME__PROFILE=managed
+```
+
+`fixture` uses `consumer_finance_phase1` and `data/index/bm25_state.json`. `evaluation` uses
+`consumer_finance_evaluation` and `data/index/evaluation_bm25_state.json`. These static profiles
+remain independent of the application lineage database.
+
+`managed` requires `RAG__DATABASE__URL`, completed application migrations, persisted lineage, and
+an ACTIVE generation published by `scripts/index_managed.py --publish`. PostgreSQL resolves the
+Qdrant collection and matching persisted BM25 state together. Streamlit displays the pinned
+generation and collection. It never silently falls back to fixture when managed startup fails.
+If another generation becomes ACTIVE while the process is running, the current process remains
+pinned to its original collection/BM25 pair; restart the application to resolve the new ACTIVE
+generation. Automatic polling and hot reload are not implemented.
 
 ### Debug retrieval
 
@@ -316,11 +343,11 @@ operational controls. Phase 2 implements offline experiments and production-path
 not claim production monitoring, quality gains, or release thresholds.
 
 Phase 3 currently provides the application PostgreSQL schema, deterministic planning,
-transactional lineage/version persistence, and an explicit immutable managed-index publisher.
-Managed runtime retrieval, restoration, concurrent apply locking, cleanup/retention, ACLs, PII
-handling, production deployment, and formal CI regression gates remain future work. Kafka,
-Airflow, Kubernetes, Supabase, OpenSearch, and additional orchestration frameworks remain out of
-scope.
+transactional lineage/version persistence, an explicit immutable managed-index publisher, and an
+explicit generation-pinned managed runtime profile. Restoration, automatic runtime reload,
+concurrent apply locking, cleanup/retention, ACLs, PII handling, production deployment, and formal
+CI regression gates remain future work. Kafka, Airflow, Kubernetes, Supabase, OpenSearch, and
+additional orchestration frameworks remain out of scope.
 
 See [architecture details](docs/architecture.md) and the
 [Phase 2 interview notes](docs/phase2-interview-notes.md). The first expanded-corpus run and its

@@ -341,7 +341,7 @@ The CLI constructs the existing lazy `HuggingFaceEmbeddingProvider` from model s
 dimension-aware `ManagedQdrantStore` factory from the configured Qdrant URL. It contains no BM25,
 dense-reuse, point-preparation, upsert, or activation algorithm. Repeating the command against
 unchanged lineage/configuration returns `NO_INDEX_CHANGE`; older immutable generations are
-retained. Runtime/Streamlit retrieval still does not resolve the managed ACTIVE generation.
+retained.
 
 Managed retrieval resolution is a separate, explicit factory boundary:
 
@@ -372,8 +372,29 @@ fingerprint.
 Resolution is process-lifetime pinned: a runtime built for `g000003` keeps both that collection and
 its matching BM25 encoder even if `g000004` is activated later. A process restart or future
 explicit reload must rebuild the complete runtime; collection names are never hot-swapped alone.
-The default factory, Phase 1/2 retrieval paths, and Streamlit remain unchanged and are not yet
-wired to managed retrieval.
+The Phase 1/2 retrieval implementations remain unchanged.
+
+Application integration uses a separate explicit profile dispatcher rather than changing the
+legacy/evaluation factory entry points:
+
+```text
+runtime.profile = fixture    -> Phase 1 collection + Phase 1 BM25 file
+runtime.profile = evaluation -> evaluation collection + evaluation BM25 file
+runtime.profile = managed    -> ManagedRetrievalRuntime.retrieval_service
+                                      |
+                                      v
+                               backend-agnostic RAGPipeline
+```
+
+`fixture` is the default, so existing application users do not require PostgreSQL. The fixture and
+evaluation profiles remain static and database-independent. Managed mode requires the application
+database and propagates missing/corrupt/incompatible ACTIVE-generation errors without falling back.
+Streamlit caches the selected `RetrievalRuntime`, displays the selected profile, and displays a
+generation/collection only for managed mode. On the first submitted question it reuses that pinned
+retrieval runtime while lazily composing the Bedrock-backed `ApplicationRuntime` and request
+tracer. This avoids AWS/MLflow startup work while keeping the collection and BM25 encoder pinned as
+one unit for the process/session lifecycle. A restart is required to select a newly activated
+generation; there is no polling or automatic hot reload.
 
 The managed Qdrant boundary stores only fully prepared generation data:
 

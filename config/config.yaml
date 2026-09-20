@@ -29,6 +29,9 @@ aws:
 database:
   url: null
 
+runtime:
+  profile: fixture
+
 managed_ingestion:
   corpus_key: consumer-finance-managed
   qdrant_collection_prefix: consumer_finance_managed
