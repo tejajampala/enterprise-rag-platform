@@ -181,6 +181,9 @@ class QdrantHybridStore:
                     "source_id": payload.get("source_id"),
                     "access_visibility": payload.get("access_visibility"),
                     "allowed_groups": payload.get("allowed_groups"),
+                    "contains_pii": payload.get("contains_pii"),
+                    "pii_types": payload.get("pii_types"),
+                    "pii_detector_version": payload.get("pii_detector_version"),
                 },
             )
             retrieved.append(

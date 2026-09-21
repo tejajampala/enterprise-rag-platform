@@ -255,6 +255,41 @@ state and all eligible dense vectors. Old generation-pinned runtimes retain the 
 payload; newly constructed runtimes resolve the newly ACTIVE generation. This is group-based
 authorization metadata, not user/group storage or authentication.
 
+### Managed PII classification and redaction
+
+Managed indexing also applies a local, deterministic PII detector for `EMAIL`, practical AU and
+international `PHONE` values, checksum-valid Australian `AU_TFN` values, and Luhn-valid
+`CREDIT_CARD` values. It uses no external model, network service, or cloud DLP API. Detection
+results are derived governance metadata: PostgreSQL stores only detector version, classification
+hash, canonical PII types, and match count for each immutable document version. Raw detected
+values are not copied into classification metadata or logs, and original lineage/chunk text is
+never rewritten.
+
+Managed retrieval defaults to `REDACT`. ACL authorization is applied first, original authorized
+text is used internally for retrieval and reranking, and only then are final contexts transformed:
+
+```python
+from consumer_finance_rag.access import AccessContext
+from consumer_finance_rag.pii import PIIHandlingPolicy
+
+result = managed_runtime.retrieval_service.retrieve(
+    "How should this fraud case be handled?",
+    access_context=AccessContext(groups=frozenset({"fraud-analysts"})),
+    pii_policy=PIIHandlingPolicy.REDACT,  # managed default when omitted
+)
+```
+
+Redactions use typed placeholders such as `[REDACTED:EMAIL]` and
+`[REDACTED:CREDIT_CARD]`. A post-redaction local scan fails closed if a supported value remains.
+`ALLOW` must be requested explicitly and is independent of ACL group membership. Fixture and
+evaluation profiles retain their existing unredacted defaults.
+
+Detector identity is part of the managed index configuration, but not source-document identity.
+Changing detector versions persists another derived classification and publishes a new immutable
+generation while retaining the same source version. If text is unchanged, BM25 state and eligible
+dense vectors are reused. Managed payload schema v3 contains only safe coarse fields:
+`contains_pii`, sorted `pii_types`, and `pii_detector_version`.
+
 ### Validate the complete Phase 3 lifecycle offline
 
 `tests/test_phase3_end_to_end.py` is the deterministic managed-lifecycle regression test. It uses
@@ -411,7 +446,7 @@ Phase 3 currently provides the application PostgreSQL schema, deterministic plan
 transactional lineage/version persistence, an explicit immutable managed-index publisher, and an
 explicit generation-pinned managed runtime profile with public/group Qdrant pre-filtering.
 Authentication, restoration, automatic runtime reload, concurrent apply locking,
-cleanup/retention, PII handling, production deployment, and formal
+cleanup/retention, semantic/LLM-based PII classification, production deployment, and formal
 release thresholds remain future work. Kafka, Airflow, Kubernetes, Supabase, OpenSearch, and
 additional orchestration frameworks remain out of scope.
 

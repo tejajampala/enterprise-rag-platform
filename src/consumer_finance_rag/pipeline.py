@@ -6,6 +6,7 @@ from consumer_finance_rag.access import AccessContext
 from consumer_finance_rag.context import ContextBuilder
 from consumer_finance_rag.models import ModelMetadata, RAGResponse
 from consumer_finance_rag.observability import NoOpTracer, Tracer
+from consumer_finance_rag.pii import PIIHandlingPolicy
 from consumer_finance_rag.prompts import SYSTEM_PROMPT, build_user_prompt
 from consumer_finance_rag.providers import EmbeddingProvider, LLMProvider, RerankerProvider
 from consumer_finance_rag.retrieval import HybridRetrievalService
@@ -36,6 +37,7 @@ class RAGPipeline:
         question: str,
         *,
         access_context: AccessContext | None = None,
+        pii_policy: PIIHandlingPolicy | None = None,
     ) -> RAGResponse:
         attributes: dict[str, object] = {
             "embedding.model": self.embedding_provider.model_name,
@@ -49,6 +51,7 @@ class RAGPipeline:
             retrieval_result = self.retrieval.retrieve(
                 question,
                 access_context=access_context,
+                pii_policy=pii_policy,
             )
             context = self.context_builder.build(retrieval_result.chunks)
             result = self.llm.generate(SYSTEM_PROMPT, build_user_prompt(question, context.text))

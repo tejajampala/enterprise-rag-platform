@@ -260,6 +260,9 @@ def create_physical_collection(
                         "text": "fraud payment help",
                         "access_visibility": "PUBLIC",
                         "allowed_groups": [],
+                        "contains_pii": False,
+                        "pii_types": [],
+                        "pii_detector_version": "deterministic-pii-v1",
                     },
                 )
             ],

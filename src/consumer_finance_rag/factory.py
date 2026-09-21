@@ -232,6 +232,8 @@ def _retrieval_with_tracer(
         tracer=tracer,
         collection_name=service.collection_name,
         access_control_enabled=service.access_control_enabled,
+        pii_handling_enabled=service.pii_handling_enabled,
+        pii_detector=service.pii_detector,
     )
 
 

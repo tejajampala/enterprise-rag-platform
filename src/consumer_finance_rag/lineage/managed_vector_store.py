@@ -29,6 +29,7 @@ from consumer_finance_rag.lineage.index_types import (
 from consumer_finance_rag.lineage.index_types import (
     managed_point_id as managed_point_id,
 )
+from consumer_finance_rag.pii import pii_summary_payload
 
 PROTECTED_COLLECTION_NAMES = frozenset(
     {"consumer_finance_phase1", "consumer_finance_evaluation"}
@@ -564,6 +565,7 @@ def _point_payload(
         "point_id_format_version": configuration.point_id_format_version,
         "payload_schema_version": configuration.payload_schema_version,
         **access_policy_payload(chunk.access_policy),
+        **pii_summary_payload(chunk.pii_summary),
     }
 
 

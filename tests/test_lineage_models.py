@@ -18,6 +18,7 @@ from consumer_finance_rag.lineage.models import (
     Base,
     Corpus,
     DocumentVersion,
+    DocumentVersionPII,
     IndexState,
     IndexStateChunk,
     IngestionRun,
@@ -30,6 +31,7 @@ APPLICATION_TABLES = {
     "chunks",
     "corpora",
     "document_versions",
+    "document_version_pii",
     "documents",
     "index_state_chunks",
     "index_states",
@@ -212,6 +214,61 @@ def test_document_version_defaults_to_public_access(session: Session) -> None:
 
     assert version.access_visibility == "PUBLIC"
     assert version.allowed_groups == []
+
+
+def test_document_version_accepts_multiple_immutable_pii_detector_results(
+    session: Session,
+) -> None:
+    corpus = make_corpus(session)
+    run = make_run(session, corpus)
+    document = make_document(session, corpus, run)
+    version = make_version(session, document, run)
+    first = DocumentVersionPII(
+        document_version=version,
+        detector_version="deterministic-pii-v1",
+        classification_hash="d" * 64,
+        pii_types=["EMAIL"],
+        match_count=1,
+    )
+    second = DocumentVersionPII(
+        document_version=version,
+        detector_version="deterministic-pii-v2",
+        classification_hash="e" * 64,
+        pii_types=[],
+        match_count=0,
+    )
+    session.add_all([first, second])
+    session.flush()
+
+    assert version.pii_classifications == [first, second]
+
+
+def test_duplicate_pii_detector_version_is_rejected(session: Session) -> None:
+    corpus = make_corpus(session)
+    run = make_run(session, corpus)
+    document = make_document(session, corpus, run)
+    version = make_version(session, document, run)
+    session.add_all(
+        [
+            DocumentVersionPII(
+                document_version=version,
+                detector_version="deterministic-pii-v1",
+                classification_hash="d" * 64,
+                pii_types=[],
+                match_count=0,
+            ),
+            DocumentVersionPII(
+                document_version=version,
+                detector_version="deterministic-pii-v1",
+                classification_hash="e" * 64,
+                pii_types=["EMAIL"],
+                match_count=1,
+            ),
+        ]
+    )
+
+    with pytest.raises(IntegrityError):
+        session.flush()
 
 
 def test_domain_statuses_reject_unknown_values() -> None:
@@ -639,9 +696,13 @@ def test_acl_migration_preserves_existing_versions_with_public_default(
             ),
             {"version": version_id},
         ).one()
+        pii_count = connection.execute(
+            text("SELECT count(*) FROM document_version_pii")
+        ).scalar_one()
     inspection_engine.dispose()
     assert row.access_visibility == "PUBLIC"
     assert row.allowed_groups == "[]"
+    assert pii_count == 0
 
     command.downgrade(alembic_config, "0002_managed_index_generations")
     inspection_engine = create_engine(database_url)
@@ -649,6 +710,7 @@ def test_acl_migration_preserves_existing_versions_with_public_default(
         column["name"]
         for column in inspect(inspection_engine).get_columns("document_versions")
     }
+    table_names = set(inspect(inspection_engine).get_table_names())
     with inspection_engine.connect() as connection:
         assert connection.execute(
             text("SELECT count(*) FROM document_versions")
@@ -656,3 +718,4 @@ def test_acl_migration_preserves_existing_versions_with_public_default(
     inspection_engine.dispose()
     assert "access_visibility" not in columns
     assert "allowed_groups" not in columns
+    assert "document_version_pii" not in table_names

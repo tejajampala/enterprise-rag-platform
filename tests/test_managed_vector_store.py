@@ -120,9 +120,12 @@ def prepared_point(index: int = 0, *, generation: int = 1) -> ManagedPointInput:
             "index_state_id": str(index_state_id),
             "chunking_fingerprint": chunk.chunking_fingerprint,
             "point_id_format_version": "lineage-chunk-uuid5-v1",
-            "payload_schema_version": "managed-qdrant-payload-v2",
+            "payload_schema_version": "managed-qdrant-payload-v3",
             "access_visibility": "PUBLIC",
             "allowed_groups": [],
+            "contains_pii": False,
+            "pii_types": [],
+            "pii_detector_version": "deterministic-pii-v1",
         },
     )
 
@@ -256,9 +259,12 @@ def test_one_point_upsert_contains_legacy_and_lineage_payload(
     assert payload["index_state_id"] == str(point.index_state_id)
     assert payload["chunking_fingerprint"] == point.chunk.chunking_fingerprint
     assert payload["point_id_format_version"] == "lineage-chunk-uuid5-v1"
-    assert payload["payload_schema_version"] == "managed-qdrant-payload-v2"
+    assert payload["payload_schema_version"] == "managed-qdrant-payload-v3"
     assert payload["access_visibility"] == "PUBLIC"
     assert payload["allowed_groups"] == []
+    assert payload["contains_pii"] is False
+    assert payload["pii_types"] == []
+    assert payload["pii_detector_version"] == "deterministic-pii-v1"
 
 
 def test_batched_upsert_waits_and_preserves_all_points(
@@ -435,6 +441,19 @@ def test_validator_detects_payload_mismatch(
 
     with pytest.raises(ManagedCollectionValidationError, match=r"payload .* mismatch"):
         store.validate_generation_collection(name, [point])
+
+
+def test_publication_rejects_malformed_pii_payload(store: ManagedQdrantStore) -> None:
+    point = prepared_point()
+    malformed_payload = dict(point.payload)
+    malformed_payload["contains_pii"] = True
+    malformed_payload["pii_types"] = []
+    malformed = replace(point, payload=malformed_payload)
+    name = store.collection_name(1)
+    store.create_generation_collection(name)
+
+    with pytest.raises(ManagedVectorValidationError, match="payload does not match"):
+        store.upsert_points(name, [malformed])
 
 
 @pytest.mark.parametrize("missing_vector", ["dense", "sparse"])

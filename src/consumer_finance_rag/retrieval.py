@@ -17,6 +17,10 @@ from consumer_finance_rag.access import (
 from consumer_finance_rag.config import RetrievalSettings
 from consumer_finance_rag.models import RetrievalMetadata, RetrievedChunk
 from consumer_finance_rag.observability import NoOpTracer, Tracer, chunk_summaries
+from consumer_finance_rag.pii import (
+    DeterministicPIIDetector,
+    PIIHandlingPolicy,
+)
 from consumer_finance_rag.providers import EmbeddingProvider, RerankerProvider
 from consumer_finance_rag.sparse import BM25SparseEncoder
 
@@ -108,6 +112,8 @@ class HybridRetrievalService:
         tracer: Tracer | None = None,
         collection_name: str | None = None,
         access_control_enabled: bool = False,
+        pii_handling_enabled: bool = False,
+        pii_detector: DeterministicPIIDetector | None = None,
     ) -> None:
         self.embedding_provider = embedding_provider
         self.reranker = reranker
@@ -117,6 +123,8 @@ class HybridRetrievalService:
         self.tracer = tracer or NoOpTracer()
         self.collection_name = collection_name
         self.access_control_enabled = access_control_enabled
+        self.pii_handling_enabled = pii_handling_enabled
+        self.pii_detector = pii_detector or DeterministicPIIDetector()
 
     def retrieve(
         self,
@@ -124,11 +132,13 @@ class HybridRetrievalService:
         top_k: int | None = None,
         *,
         access_context: AccessContext | None = None,
+        pii_policy: PIIHandlingPolicy | None = None,
     ) -> RetrievalResult:
         trace = self.retrieve_debug(
             query,
             top_k=top_k,
             access_context=access_context,
+            pii_policy=pii_policy,
         )
         return RetrievalResult(chunks=trace.reranked, metadata=trace.metadata)
 
@@ -138,6 +148,7 @@ class HybridRetrievalService:
         top_k: int | None = None,
         *,
         access_context: AccessContext | None = None,
+        pii_policy: PIIHandlingPolicy | None = None,
     ) -> RetrievalTrace:
         """Run the production retrieval path while retaining each ranked stage."""
 
@@ -149,6 +160,11 @@ class HybridRetrievalService:
             build_qdrant_access_filter(resolved_access)
             if self.access_control_enabled
             else None
+        )
+        resolved_pii_policy = pii_policy or (
+            PIIHandlingPolicy.REDACT
+            if self.pii_handling_enabled
+            else PIIHandlingPolicy.ALLOW
         )
         with self.tracer.span(
             "embed_query",
@@ -228,7 +244,13 @@ class HybridRetrievalService:
                 {"query": query, "chunk_ids": [item.chunk.chunk_id for item in candidates]}
             )
             reranked = self.reranker.rerank(query, candidates, final_contexts)
-            final = reranked[:final_contexts]
+            unredacted_final = reranked[:final_contexts]
+            self._validate_authorized(
+                unredacted_final,
+                resolved_access,
+                stage="reranker",
+            )
+            final = self._apply_pii_policy(unredacted_final, resolved_pii_policy)
             span.set_outputs(chunk_summaries(final))
         return RetrievalTrace(
             dense=dense,
@@ -264,3 +286,21 @@ class HybridRetrievalService:
                 raise AuthorizationInvariantError(
                     f"Managed {stage} result {candidate.chunk.chunk_id!r} violated ACL filter"
                 )
+
+    def _apply_pii_policy(
+        self,
+        candidates: Sequence[RetrievedChunk],
+        policy: PIIHandlingPolicy,
+    ) -> list[RetrievedChunk]:
+        if policy is PIIHandlingPolicy.ALLOW:
+            return list(candidates)
+        return [
+            candidate.model_copy(
+                update={
+                    "chunk": candidate.chunk.model_copy(
+                        update={"text": self.pii_detector.redact(candidate.chunk.text)}
+                    )
+                }
+            )
+            for candidate in candidates
+        ]

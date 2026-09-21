@@ -33,6 +33,7 @@ from consumer_finance_rag.lineage.models import (
     DOCUMENT_CHANGE_TYPES,
     Corpus,
     DocumentVersion,
+    DocumentVersionPII,
     IndexState,
     IndexStateChunk,
     IngestionRun,
@@ -42,6 +43,7 @@ from consumer_finance_rag.lineage.models import (
     utc_now,
 )
 from consumer_finance_rag.lineage.types import ChunkPersistenceInput
+from consumer_finance_rag.pii import DocumentPIISummary
 
 FINISHED_INGESTION_STATUSES = frozenset({"SUCCEEDED", "NOOP"})
 
@@ -489,6 +491,45 @@ class LineageRepository:
         self._session.add(version)
         self._session.flush()
         return version
+
+    def get_document_version_pii(
+        self,
+        document_version_id: UUID,
+        detector_version: str,
+    ) -> DocumentVersionPII | None:
+        """Return one immutable derived classification, if already persisted."""
+
+        return self._session.get(
+            DocumentVersionPII,
+            (document_version_id, detector_version),
+        )
+
+    def create_document_version_pii(
+        self,
+        document_version_id: UUID,
+        summary: DocumentPIISummary,
+    ) -> DocumentVersionPII:
+        """Persist a caller-computed safe classification without raw match values."""
+
+        self._require_document_version(document_version_id)
+        if self.get_document_version_pii(
+            document_version_id,
+            summary.detector_version,
+        ) is not None:
+            raise LineageConflictError(
+                "PII classification already exists for document version "
+                f"{document_version_id} and detector {summary.detector_version!r}"
+            )
+        classification = DocumentVersionPII(
+            document_version_id=document_version_id,
+            detector_version=summary.detector_version,
+            classification_hash=summary.classification_hash,
+            pii_types=[pii_type.value for pii_type in summary.pii_types],
+            match_count=summary.match_count,
+        )
+        self._session.add(classification)
+        self._session.flush()
+        return classification
 
     def list_chunks_for_version(self, document_version_id: UUID) -> list[LineageChunk]:
         """List chunks deterministically by ordinal and persisted identity."""

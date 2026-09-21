@@ -54,6 +54,7 @@ from consumer_finance_rag.lineage.repository import (
     LineageNotFoundError,
     LineageRepository,
 )
+from consumer_finance_rag.pii import DETERMINISTIC_PII_VERSION
 from consumer_finance_rag.providers import EmbeddingProvider
 from consumer_finance_rag.sparse import BM25State, bm25_state_to_json_dict
 
@@ -412,6 +413,7 @@ class ManagedIndexService:
             self._managed_index_settings,
             embedding_fingerprint=calculated_embedding,
             chunking_fingerprint=calculated_chunking,
+            pii_detector_version=_manifest_pii_detector_version(manifest),
         )
 
     def _load_build_context(
@@ -764,6 +766,19 @@ class ManagedIndexService:
 
 def _optional_state_id(state: IndexState | None) -> UUID | None:
     return state.index_state_id if state is not None else None
+
+
+def _manifest_pii_detector_version(manifest: ActiveChunkManifest) -> str:
+    versions = {
+        document.pii_summary.detector_version for document in manifest.documents
+    } | {chunk.pii_summary.detector_version for chunk in manifest.chunks}
+    if not versions:
+        return DETERMINISTIC_PII_VERSION
+    if len(versions) != 1:
+        raise ManagedIndexPublishError(
+            "Active manifest contains inconsistent PII detector versions"
+        )
+    return next(iter(versions))
 
 
 def _same_logical_index(

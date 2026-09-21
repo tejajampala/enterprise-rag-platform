@@ -42,6 +42,7 @@ from consumer_finance_rag.lineage.models import (
     Base,
     Corpus,
     DocumentVersion,
+    DocumentVersionPII,
     IndexState,
     IndexStateChunk,
     IngestionRun,
@@ -57,6 +58,10 @@ from consumer_finance_rag.lineage.service import (
 )
 from consumer_finance_rag.models import RetrievedChunk
 from consumer_finance_rag.normalization import normalize_record
+from consumer_finance_rag.pii import (
+    DeterministicPIIDetector,
+    PIIHandlingPolicy,
+)
 from consumer_finance_rag.sparse import (
     BM25SparseEncoder,
     bm25_corpus_hash,
@@ -128,6 +133,7 @@ class DeterministicEmbeddingProvider:
 class DeterministicReranker:
     def __init__(self) -> None:
         self.calls: list[tuple[str, tuple[str, ...]]] = []
+        self.text_calls: list[tuple[str, ...]] = []
 
     @property
     def model_name(self) -> str:
@@ -140,6 +146,7 @@ class DeterministicReranker:
         top_k: int,
     ) -> list[RetrievedChunk]:
         self.calls.append((query, tuple(item.chunk.chunk_id for item in candidates)))
+        self.text_calls.append(tuple(item.chunk.text for item in candidates))
         query_terms = set(re.findall(r"[a-z0-9]+", query.lower()))
         rescored = [
             item.model_copy(
@@ -643,6 +650,159 @@ def test_acl_filtered_retrieval_and_acl_only_generation_are_pinned(
         generation_1.collection: qdrant.count(generation_1.collection, exact=True).count,
         generation_2.collection: qdrant.count(generation_2.collection, exact=True).count,
     } == qdrant_counts_before
+
+
+def test_managed_pii_redaction_and_detector_generation_reuse(
+    engine: Engine,
+) -> None:
+    sessions = sessionmaker(bind=engine, class_=Session, expire_on_commit=False)
+    settings = build_test_settings()
+    qdrant = QdrantClient(":memory:")
+    embedding = DeterministicEmbeddingProvider(settings.models.embedding.model)
+    publisher = build_publisher(sessions, settings, qdrant, embedding)
+    fraud_policy = DocumentAccessPolicy(
+        visibility=AccessVisibility.RESTRICTED,
+        allowed_groups=frozenset({"fraud-analysts"}),
+    )
+    records = (
+        SourceRecord(
+            source_id="public-email",
+            title="Public support contact",
+            source_url="https://example.test/public-email",
+            category="credit-cards",
+            source_version="v1",
+            text="Omega support contact alice@example.com",
+        ),
+        SourceRecord(
+            source_id="restricted-tfn",
+            title="Restricted fraud case",
+            source_url="https://example.test/restricted-tfn",
+            category="payments-fraud",
+            source_version="v1",
+            text="Alpha customer TFN 123456782 requires dispute investigation.",
+            access_policy=fraud_policy,
+        ),
+        SourceRecord(
+            source_id="public-safe",
+            title="Public mortgage guidance",
+            source_url="https://example.test/public-safe",
+            category="mortgages",
+            source_version="v1",
+            text="Mortgage escrow public guidance without personal data.",
+        ),
+    )
+    applied = apply_snapshot(sessions, records)
+    generation_1 = publisher.publish(applied.manifest, applied.result.run_id)
+    runtime_g1, _, reranker = build_runtime(sessions, settings, qdrant)
+    query = "omega support alpha TFN dispute mortgage escrow"
+
+    public_result = runtime_g1.retrieval_service.retrieve_debug(query, top_k=10)
+
+    public_sources = {
+        str(item.chunk.metadata["source_id"]): item.chunk.text
+        for item in public_result.reranked
+    }
+    assert set(public_sources) == {"public-email", "public-safe"}
+    assert public_sources["public-email"] == (
+        "Omega support contact [REDACTED:EMAIL]"
+    )
+    assert "restricted-tfn" not in public_sources
+    assert any(
+        "alice@example.com" in text
+        for call in reranker.text_calls
+        for text in call
+    )
+
+    fraud_result = runtime_g1.retrieval_service.retrieve_debug(
+        query,
+        top_k=10,
+        access_context=AccessContext(groups=frozenset({"fraud-analysts"})),
+    )
+    fraud_sources = {
+        str(item.chunk.metadata["source_id"]): item.chunk.text
+        for item in fraud_result.reranked
+    }
+    assert fraud_sources["restricted-tfn"] == (
+        "Alpha customer TFN [REDACTED:AU_TFN] requires dispute investigation."
+    )
+    assert all("alice@example.com" not in item.chunk.text for item in fraud_result.reranked)
+    assert all("123456782" not in item.chunk.text for item in fraud_result.reranked)
+
+    raw_result = runtime_g1.retrieval_service.retrieve_debug(
+        query,
+        top_k=10,
+        access_context=AccessContext(groups=frozenset({"fraud-analysts"})),
+        pii_policy=PIIHandlingPolicy.ALLOW,
+    )
+    assert any("123456782" in item.chunk.text for item in raw_result.reranked)
+
+    with sessions() as session:
+        version_count_before = (
+            session.scalar(select(func.count()).select_from(DocumentVersion)) or 0
+        )
+        classifications_before = list(
+            session.scalars(select(DocumentVersionPII))
+        )
+        assert len(classifications_before) == 3
+        assert {
+            classification.detector_version
+            for classification in classifications_before
+        } == {"deterministic-pii-v1"}
+
+    with sessions() as session, session.begin():
+        manifest_v2 = ChunkMaterializationService(
+            session,
+            chunk_size=CHUNK_SIZE,
+            overlap=CHUNK_OVERLAP,
+            pii_detector=DeterministicPIIDetector("deterministic-pii-v2-test"),
+        ).materialize_active_manifest(CORPUS_KEY)
+
+    embedded_before = embedding.embedded_document_count
+    generation_2 = publisher.publish(manifest_v2, applied.result.run_id)
+
+    assert generation_2.outcome is ManagedIndexPublishOutcome.PUBLISHED
+    assert generation_2.generation == 2
+    assert generation_2.bm25_action is BM25PlanAction.REUSE
+    assert generation_2.dense_reused_count == manifest_v2.chunk_count
+    assert generation_2.dense_computed_count == 0
+    assert embedding.embedded_document_count == embedded_before
+    with sessions() as session:
+        assert (
+            session.scalar(select(func.count()).select_from(DocumentVersion)) or 0
+        ) == version_count_before
+        assert (
+            session.scalar(select(func.count()).select_from(DocumentVersionPII)) or 0
+        ) == 6
+
+    def payloads(collection: str) -> list[dict[str, Any]]:
+        points, _ = qdrant.scroll(
+            collection_name=collection,
+            limit=100,
+            with_payload=True,
+            with_vectors=False,
+        )
+        return [dict(point.payload or {}) for point in points]
+
+    g1_payloads = payloads(generation_1.collection)
+    g2_payloads = payloads(generation_2.collection)
+    assert {payload["pii_detector_version"] for payload in g1_payloads} == {
+        "deterministic-pii-v1"
+    }
+    assert {payload["pii_detector_version"] for payload in g2_payloads} == {
+        "deterministic-pii-v2-test"
+    }
+    email_payload = next(
+        payload for payload in g2_payloads if payload["source_id"] == "public-email"
+    )
+    assert email_payload["contains_pii"] is True
+    assert email_payload["pii_types"] == ["EMAIL"]
+    safe_metadata = {
+        key: value for key, value in email_payload.items() if key != "text"
+    }
+    assert "alice@example.com" not in str(safe_metadata)
+    assert runtime_g1.generation == 1
+    assert_generation_invariants(sessions, qdrant, generation_1, "RETIRED")
+    assert_generation_invariants(sessions, qdrant, generation_2, "ACTIVE")
 
 
 def build_test_settings() -> AppSettings:

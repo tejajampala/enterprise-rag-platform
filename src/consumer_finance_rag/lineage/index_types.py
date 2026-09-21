@@ -15,6 +15,7 @@ from consumer_finance_rag.lineage.fingerprints import (
     PAYLOAD_SCHEMA_VERSION,
     POINT_ID_FORMAT_VERSION,
 )
+from consumer_finance_rag.pii import DocumentPIISummary, empty_pii_summary
 from consumer_finance_rag.sparse import BM25State
 
 MANAGED_POINT_NAMESPACE = UUID("cc63cb7b-a905-5cf0-a0df-a6290ee69960")
@@ -50,6 +51,7 @@ class ActiveDocumentVersion:
     access_policy: DocumentAccessPolicy = dataclass_field(
         default_factory=public_access_policy
     )
+    pii_summary: DocumentPIISummary = dataclass_field(default_factory=empty_pii_summary)
 
 
 @dataclass(frozen=True, slots=True)
@@ -76,6 +78,7 @@ class ActiveChunk:
     access_policy: DocumentAccessPolicy = dataclass_field(
         default_factory=public_access_policy
     )
+    pii_summary: DocumentPIISummary = dataclass_field(default_factory=empty_pii_summary)
 
 
 @dataclass(frozen=True, slots=True)

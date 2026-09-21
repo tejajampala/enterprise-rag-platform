@@ -173,6 +173,7 @@ def build_managed_retrieval_runtime(
         tracer=tracer,
         collection_name=active.qdrant_collection,
         access_control_enabled=True,
+        pii_handling_enabled=True,
     )
     return ManagedRetrievalRuntime(
         index_state_id=active.index_state_id,
@@ -307,6 +308,7 @@ def _parse_configuration(payload: Mapping[str, Any]) -> ManagedIndexConfiguratio
             bm25_tokenizer_version=_string(bm25, "tokenizer_version"),
             point_id_format_version=_string(payload, "point_id_format_version"),
             payload_schema_version=_string(payload, "payload_schema_version"),
+            pii_detector_version=_string(payload, "pii_detector_version"),
         )
     except (KeyError, TypeError, ValueError) as exc:
         raise CorruptActiveManagedIndexError(

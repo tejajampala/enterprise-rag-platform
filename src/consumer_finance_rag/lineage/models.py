@@ -223,6 +223,10 @@ class DocumentVersion(Base):
     chunks: Mapped[list[LineageChunk]] = relationship(
         back_populates="document_version", order_by="LineageChunk.ordinal"
     )
+    pii_classifications: Mapped[list[DocumentVersionPII]] = relationship(
+        back_populates="document_version",
+        order_by="DocumentVersionPII.detector_version",
+    )
 
     @validates("access_visibility")
     def validate_access_visibility(self, _key: str, value: str) -> str:
@@ -231,6 +235,51 @@ class DocumentVersion(Base):
         return _validate_domain_value(
             "access_visibility", value, ACCESS_VISIBILITIES
         )
+
+
+class DocumentVersionPII(Base):
+    """Immutable derived PII classification for one detector/version pair."""
+
+    __tablename__ = "document_version_pii"
+    __table_args__ = (
+        CheckConstraint(
+            "match_count >= 0",
+            name="ck_document_version_pii_match_count_nonnegative",
+        ),
+    )
+
+    document_version_id: Mapped[UUID] = mapped_column(
+        Uuid,
+        ForeignKey("document_versions.document_version_id"),
+        primary_key=True,
+    )
+    detector_version: Mapped[str] = mapped_column(
+        String(255),
+        primary_key=True,
+    )
+    classification_hash: Mapped[str] = mapped_column(CHAR(64), nullable=False)
+    pii_types: Mapped[list[str]] = mapped_column(
+        PORTABLE_JSON,
+        nullable=False,
+        default=list,
+        server_default="[]",
+    )
+    match_count: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+        default=0,
+        server_default="0",
+    )
+    classified_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        default=utc_now,
+        server_default=func.now(),
+    )
+
+    document_version: Mapped[DocumentVersion] = relationship(
+        back_populates="pii_classifications"
+    )
 
 
 class LineageChunk(Base):

@@ -601,6 +601,9 @@ def test_point_ids_payloads_and_results_are_deterministic_and_complete() -> None
         "payload_schema_version",
         "access_visibility",
         "allowed_groups",
+        "contains_pii",
+        "pii_types",
+        "pii_detector_version",
     }
 
     assert first == second

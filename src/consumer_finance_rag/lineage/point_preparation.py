@@ -26,6 +26,7 @@ from consumer_finance_rag.lineage.index_types import (
     PreparedManagedGeneration,
     managed_point_id,
 )
+from consumer_finance_rag.pii import pii_summary_payload
 from consumer_finance_rag.sparse import (
     BM25SparseEncoder,
     BM25State,
@@ -373,4 +374,5 @@ def _current_payload(
         "point_id_format_version": identity.point_id_format_version,
         "payload_schema_version": identity.payload_schema_version,
         **access_policy_payload(chunk.access_policy),
+        **pii_summary_payload(chunk.pii_summary),
     }

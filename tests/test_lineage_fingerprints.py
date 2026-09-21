@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from dataclasses import replace
+
 from consumer_finance_rag.config import load_settings
 from consumer_finance_rag.lineage.fingerprints import (
     ManagedIndexConfiguration,
@@ -57,7 +59,16 @@ def test_managed_index_configuration_fingerprint_tracks_build_settings() -> None
         managed_index_configuration(embedding_fingerprint="c" * 64)
     ).fingerprint
 
-    assert len({original, changed_hnsw, changed_bm25, changed_embedding}) == 4
+    changed_pii_detector = managed_index_configuration_identity(
+        replace(
+            managed_index_configuration(),
+            pii_detector_version="deterministic-pii-v2-test"
+        )
+    ).fingerprint
+
+    assert len(
+        {original, changed_hnsw, changed_bm25, changed_embedding, changed_pii_detector}
+    ) == 5
 
 
 def test_retrieval_tuning_does_not_affect_managed_index_fingerprint() -> None:

@@ -20,6 +20,7 @@ from consumer_finance_rag.lineage.chunk_materialization import (
     ChunkDerivationMismatchError,
     ChunkMaterializationService,
     DocumentContentMismatchError,
+    PIIClassificationMismatchError,
     active_chunk_manifest_hash,
 )
 from consumer_finance_rag.lineage.fingerprints import chunking_fingerprint
@@ -27,6 +28,7 @@ from consumer_finance_rag.lineage.index_types import ActiveChunkManifest
 from consumer_finance_rag.lineage.models import (
     Base,
     DocumentVersion,
+    DocumentVersionPII,
     IndexState,
     IndexStateChunk,
     IngestionRun,
@@ -43,6 +45,7 @@ from consumer_finance_rag.lineage.service import (
 )
 from consumer_finance_rag.lineage.types import ChunkPersistenceInput
 from consumer_finance_rag.normalization import normalize_record
+from consumer_finance_rag.pii import DeterministicPIIDetector, PIIType
 
 CORPUS_KEY = "consumer-finance-managed"
 COLLECTION_PREFIX = "consumer_finance_managed"
@@ -129,12 +132,14 @@ def materialize(
     *,
     chunk_size: int = INITIAL_CHUNK_SIZE,
     overlap: int = INITIAL_OVERLAP,
+    pii_detector: DeterministicPIIDetector | None = None,
 ) -> ActiveChunkManifest:
     with Session(engine) as session, session.begin():
         return ChunkMaterializationService(
             session,
             chunk_size=chunk_size,
             overlap=overlap,
+            pii_detector=pii_detector,
         ).materialize_active_manifest(CORPUS_KEY)
 
 
@@ -323,6 +328,64 @@ def test_complete_derivation_is_reused_without_duplicates(engine: Engine) -> Non
     assert [chunk.chunk_pk for chunk in second.chunks] == [
         chunk.chunk_pk for chunk in first.chunks
     ]
+
+
+def test_pii_classification_is_derived_persisted_and_versioned_separately(
+    engine: Engine,
+) -> None:
+    snapshot = make_snapshot(
+        (("cards", "Cards", "Contact alice@example.com about TFN 123456782."),)
+    )
+    apply_snapshot(engine, snapshot)
+
+    first = materialize(engine)
+    second = materialize(
+        engine,
+        pii_detector=DeterministicPIIDetector("deterministic-pii-v2-test"),
+    )
+
+    assert first.documents[0].pii_summary.pii_types == (
+        PIIType.AU_TFN,
+        PIIType.EMAIL,
+    )
+    assert first.chunks[0].pii_summary.contains_pii is True
+    assert first.manifest_hash != second.manifest_hash
+    assert first.source_snapshot_hash == second.source_snapshot_hash
+    assert first.documents[0].content_hash == second.documents[0].content_hash
+    assert first.documents[0].version_hash == second.documents[0].version_hash
+    with Session(engine) as session:
+        assert row_count(session, DocumentVersion) == 1
+        classifications = list(
+            session.scalars(
+                select(DocumentVersionPII).order_by(
+                    DocumentVersionPII.detector_version
+                )
+            )
+        )
+        assert len(classifications) == 2
+        assert classifications[0].pii_types == ["AU_TFN", "EMAIL"]
+        assert classifications[0].match_count == 2
+        persisted = str(
+            {
+                "hash": classifications[0].classification_hash,
+                "types": classifications[0].pii_types,
+                "count": classifications[0].match_count,
+            }
+        )
+        assert "alice@example.com" not in persisted
+        assert "123456782" not in persisted
+
+
+def test_changed_detector_output_requires_a_new_detector_version(engine: Engine) -> None:
+    apply_snapshot(engine, make_snapshot())
+    materialize(engine)
+    with Session(engine) as session, session.begin():
+        classification = session.scalar(select(DocumentVersionPII))
+        assert classification is not None
+        classification.classification_hash = "f" * 64
+
+    with pytest.raises(PIIClassificationMismatchError, match="bump detector version"):
+        materialize(engine)
 
 
 @pytest.mark.parametrize(

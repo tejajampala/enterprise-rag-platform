@@ -13,6 +13,7 @@ from consumer_finance_rag.access import (
     public_access_policy,
 )
 from consumer_finance_rag.config import ManagedIndexSettings
+from consumer_finance_rag.pii import DETERMINISTIC_PII_VERSION
 
 DOCUMENT_METADATA_FINGERPRINT_VERSION = "document-metadata-v1"
 DOCUMENT_VERSION_FINGERPRINT_VERSION = "document-version-v1"
@@ -24,7 +25,7 @@ MANAGED_INDEX_CONFIGURATION_FINGERPRINT_VERSION = "managed-index-configuration-v
 BM25_IMPLEMENTATION_VERSION = "client-bm25-v1"
 BM25_TOKENIZER_VERSION = "lowercase-alphanumeric-apostrophe-v1"
 POINT_ID_FORMAT_VERSION = "lineage-chunk-uuid5-v1"
-PAYLOAD_SCHEMA_VERSION = "managed-qdrant-payload-v2"
+PAYLOAD_SCHEMA_VERSION = "managed-qdrant-payload-v3"
 
 
 @dataclass(frozen=True, slots=True)
@@ -43,6 +44,7 @@ class ManagedIndexConfiguration:
     sparse_modifier: str
     sparse_on_disk: bool
     managed_index_format_version: str
+    pii_detector_version: str = DETERMINISTIC_PII_VERSION
     bm25_implementation_version: str = BM25_IMPLEMENTATION_VERSION
     bm25_tokenizer_version: str = BM25_TOKENIZER_VERSION
     point_id_format_version: str = POINT_ID_FORMAT_VERSION
@@ -70,6 +72,7 @@ class ManagedIndexConfiguration:
             "managed_index_format_version": self.managed_index_format_version,
             "payload_schema_version": self.payload_schema_version,
             "point_id_format_version": self.point_id_format_version,
+            "pii_detector_version": self.pii_detector_version,
             "sparse": {
                 "modifier": self.sparse_modifier,
                 "on_disk": self.sparse_on_disk,
@@ -116,6 +119,7 @@ def managed_index_configuration_identity_from_settings(
     *,
     embedding_fingerprint: str,
     chunking_fingerprint: str,
+    pii_detector_version: str = DETERMINISTIC_PII_VERSION,
 ) -> ManagedIndexConfigurationIdentity:
     """Compose the persisted identity from build settings, excluding retrieval tuning."""
 
@@ -133,6 +137,7 @@ def managed_index_configuration_identity_from_settings(
             sparse_modifier=settings.sparse_modifier,
             sparse_on_disk=settings.sparse_on_disk,
             managed_index_format_version=settings.format_version,
+            pii_detector_version=pii_detector_version,
         )
     )
 

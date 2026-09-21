@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 from collections.abc import Sequence
+from dataclasses import replace
 from uuid import UUID
 
 from sqlalchemy.orm import Session
@@ -22,7 +23,11 @@ from consumer_finance_rag.lineage.index_types import (
     ActiveChunkManifest,
     ActiveDocumentVersion,
 )
-from consumer_finance_rag.lineage.models import IngestionRun, LineageChunk
+from consumer_finance_rag.lineage.models import (
+    DocumentVersionPII,
+    IngestionRun,
+    LineageChunk,
+)
 from consumer_finance_rag.lineage.repository import (
     InvalidLineageStateError,
     LineageNotFoundError,
@@ -30,8 +35,13 @@ from consumer_finance_rag.lineage.repository import (
 )
 from consumer_finance_rag.lineage.types import ChunkPersistenceInput
 from consumer_finance_rag.models import Chunk, Document
+from consumer_finance_rag.pii import (
+    DeterministicPIIDetector,
+    DocumentPIISummary,
+    PIIType,
+)
 
-ACTIVE_CHUNK_MANIFEST_VERSION = "active-chunk-manifest-v1"
+ACTIVE_CHUNK_MANIFEST_VERSION = "active-chunk-manifest-v2"
 
 
 class ChunkMaterializationError(InvalidLineageStateError):
@@ -50,6 +60,10 @@ class ActiveSnapshotResolutionError(ChunkMaterializationError):
     """Raised when current ACTIVE lineage cannot be tied to successful ingestion state."""
 
 
+class PIIClassificationMismatchError(ChunkMaterializationError):
+    """Raised when detector behavior changes without a detector-version change."""
+
+
 class ChunkMaterializationService:
     """Build an exact active chunk manifest inside one caller-owned transaction."""
 
@@ -60,10 +74,12 @@ class ChunkMaterializationService:
         chunk_size: int,
         overlap: int,
         chunker_implementation: str = DEFAULT_CHUNKER_IMPLEMENTATION,
+        pii_detector: DeterministicPIIDetector | None = None,
     ) -> None:
         self._session = session
         self._repository = LineageRepository(session)
         self._chunker = ParagraphChunker(chunk_size=chunk_size, overlap=overlap)
+        self._pii_detector = pii_detector or DeterministicPIIDetector()
         self._chunking_fingerprint = chunking_fingerprint(
             chunk_size=chunk_size,
             overlap=overlap,
@@ -92,13 +108,13 @@ class ChunkMaterializationService:
             raise LineageNotFoundError(f"Corpus not found: {corpus_key}")
 
         source_run = self._resolve_successful_source_run(corpus.corpus_id)
-        documents = tuple(
+        source_documents = tuple(
             sorted(
                 self._repository.list_active_latest_document_versions(corpus.corpus_id),
                 key=lambda document: document.source_key,
             )
         )
-        source_snapshot_hash = _active_source_snapshot_hash(documents)
+        source_snapshot_hash = _active_source_snapshot_hash(source_documents)
         if (
             source_run.authoritative_snapshot
             and source_run.snapshot_hash != source_snapshot_hash
@@ -107,6 +123,9 @@ class ChunkMaterializationService:
                 "Latest authoritative successful ingestion snapshot does not match "
                 "the current ACTIVE document versions"
             )
+        documents = tuple(
+            self._classify_document(document) for document in source_documents
+        )
 
         chunks: list[ActiveChunk] = []
         for document in documents:
@@ -130,7 +149,12 @@ class ChunkMaterializationService:
                     _persistence_inputs(expected, self._chunking_fingerprint),
                 )
             chunks.extend(
-                _active_chunk(document, chunk, self._chunking_fingerprint)
+                _active_chunk(
+                    document,
+                    chunk,
+                    self._chunking_fingerprint,
+                    self._pii_detector,
+                )
                 for chunk in selected
             )
 
@@ -162,6 +186,30 @@ class ChunkMaterializationService:
             chunk_count=len(ordered_chunks),
             manifest_hash=manifest_hash,
         )
+
+    def _classify_document(
+        self,
+        document: ActiveDocumentVersion,
+    ) -> ActiveDocumentVersion:
+        calculated = self._pii_detector.classify(document.normalized_text)
+        persisted = self._repository.get_document_version_pii(
+            document.document_version_id,
+            self._pii_detector.version,
+        )
+        if persisted is None:
+            self._repository.create_document_version_pii(
+                document.document_version_id,
+                calculated,
+            )
+        else:
+            existing = _persisted_pii_summary(persisted)
+            if existing != calculated:
+                raise PIIClassificationMismatchError(
+                    "Persisted PII classification differs from current detector output for "
+                    f"document version {document.document_version_id}; bump detector version "
+                    "before changing detector semantics"
+                )
+        return replace(document, pii_summary=calculated)
 
     def _resolve_successful_source_run(self, corpus_id: UUID) -> IngestionRun:
         run = self._repository.get_latest_successful_ingestion_run(corpus_id)
@@ -204,6 +252,11 @@ def active_chunk_manifest_hash(
                 "text": chunk.text,
                 "access_visibility": chunk.access_policy.visibility.value,
                 "allowed_groups": list(chunk.access_policy.canonical_groups),
+                "pii_classification_hash": chunk.pii_summary.classification_hash,
+                "pii_detector_version": chunk.pii_summary.detector_version,
+                "pii_types": [
+                    pii_type.value for pii_type in chunk.pii_summary.pii_types
+                ],
             }
             for chunk in ordered_chunks
         ],
@@ -217,6 +270,11 @@ def active_chunk_manifest_hash(
                 "version_number": document.version_number,
                 "access_visibility": document.access_policy.visibility.value,
                 "allowed_groups": list(document.access_policy.canonical_groups),
+                "pii_classification_hash": document.pii_summary.classification_hash,
+                "pii_detector_version": document.pii_summary.detector_version,
+                "pii_types": [
+                    pii_type.value for pii_type in document.pii_summary.pii_types
+                ],
             }
             for document in ordered_documents
         ],
@@ -321,6 +379,7 @@ def _active_chunk(
     document: ActiveDocumentVersion,
     chunk: LineageChunk,
     chunking_fingerprint_value: str,
+    pii_detector: DeterministicPIIDetector,
 ) -> ActiveChunk:
     return ActiveChunk(
         document_pk=document.document_pk,
@@ -341,4 +400,21 @@ def _active_chunk(
         text=chunk.text,
         chunking_fingerprint=chunking_fingerprint_value,
         access_policy=document.access_policy,
+        pii_summary=pii_detector.classify(chunk.text),
     )
+
+
+def _persisted_pii_summary(classification: DocumentVersionPII) -> DocumentPIISummary:
+    try:
+        pii_types = tuple(PIIType(value) for value in classification.pii_types)
+        return DocumentPIISummary(
+            detector_version=classification.detector_version,
+            classification_hash=classification.classification_hash,
+            pii_types=pii_types,
+            match_count=classification.match_count,
+        )
+    except (TypeError, ValueError) as exc:
+        raise PIIClassificationMismatchError(
+            "Persisted PII classification metadata is malformed for document version "
+            f"{classification.document_version_id}"
+        ) from exc

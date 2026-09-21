@@ -592,7 +592,7 @@ restricted policies without groups, and public policies with groups are rejected
 `access_visibility` and `allowed_groups` on each immutable `document_versions` row. The v0003
 migration assigns existing rows the backward-compatible `PUBLIC` policy.
 
-Chunks inherit their owning document version's policy. Managed payload schema v2 serializes the
+Chunks inherit their owning document version's policy. Managed payload schema v3 serializes the
 explicit `access_visibility` and sorted `allowed_groups`; no principal identity or secret is
 persisted in Qdrant. At query time, a point is eligible when it is public, or when it is restricted
 and its allowed-group array contains any caller group. The identical typed Qdrant filter object is
@@ -617,6 +617,72 @@ leaving `content_hash` unchanged. The active-manifest hash includes policy, so a
 managed generation is published. If ordered chunk text is unchanged, whole-corpus BM25 state and
 exact-text dense vectors are reused; new points still carry fresh lineage IDs and ACL payload.
 
+## Managed PII governance and safe contexts
+
+The first PII milestone is deterministic and entirely local:
+
+```text
+resolved AccessContext
+        |
+        v
+Qdrant ACL-filtered dense + sparse retrieval
+        |
+        v
+RRF -> reranker (authorized original text)
+        |
+        v
+PIIHandlingPolicy (managed default: REDACT)
+        |
+        v
+local deterministic redaction + verification
+        |
+        v
+safe final contexts -> downstream LLM
+```
+
+`DeterministicPIIDetector` recognizes reasonable emails, practical AU/international phone
+formats, checksum-valid nine-digit Australian TFNs, and Luhn-valid 13–19 digit payment-card
+candidates. Detector behavior is explicitly versioned as `deterministic-pii-v1`. It stores only
+safe match structure in memory—type and offsets—and never copies the matched value into metadata.
+Names, physical addresses, medical or demographic facts, semantic/LLM classifiers, and cloud DLP
+services remain outside this milestone.
+
+PII classification is derived governance metadata, not source identity. The
+`document_version_pii` table is keyed by `(document_version_id, detector_version)` and stores the
+classification hash, sorted PII types, match count, and classification timestamp. The hash covers
+the detector version, source-text hash, and safe match structure. A changed detector implementation
+must use a new detector version; conflicting results under an existing version fail materialization.
+Neither a new derived classification nor detector upgrade changes `content_hash`, metadata hash,
+source `version_hash`, or the persisted original text.
+
+Chunk classification is deterministically recalculated from exact persisted chunk text during
+managed materialization. Payload schema v3 includes only `contains_pii`, sorted `pii_types`, and
+`pii_detector_version`; raw matches are not duplicated into Qdrant fields. Detector version is
+also part of the managed index configuration fingerprint, so detector upgrades publish a new
+immutable generation even though the source snapshot is unchanged. BM25 and dense reuse retain
+their existing text-based rules.
+
+ACL and PII have separate responsibilities and ordering. ACL decides whether a candidate may be
+retrieved and is applied before both Qdrant searches. Only authorized candidates reach RRF and the
+reranker. The PII policy then determines the representation of selected final contexts. Managed
+requests default to `REDACT`; `ALLOW` is explicit and is never inferred from groups. Redaction uses
+match offsets, preserves surrounding text and lineage identifiers, and performs a second local
+scan. If supported PII remains, retrieval raises `PIIRedactionError` instead of returning the
+context. Production `RAGPipeline` receives only the final redacted chunks under `REDACT`.
+
+The security invariants are:
+
+1. ACL authorization precedes all candidate retrieval.
+2. Unauthorized text never reaches PII handling.
+3. Authorized retrieval and reranking may use original text internally.
+4. `REDACT` transforms final contexts before downstream generation.
+5. Managed missing/default PII policy means `REDACT`, never raw exposure.
+6. Supported residual PII causes a fail-closed error.
+7. Raw detected values are not duplicated into classification metadata or logs.
+8. Original source lineage remains immutable and unredacted.
+9. Detector implementation identity is explicit and versioned.
+10. Derived PII governance metadata is separate from source-document identity.
+
 Hugging Face providers retain their model object after lazy initialization. One evaluation process
 constructs one retrieval service, explicitly warms its embedding and reranker once through the
 same provider interfaces, and reuses both across all cases. `--max-cases` changes only the selected
@@ -626,5 +692,5 @@ case list; it does not create an evaluator-specific retrieval implementation.
 
 Retrieved content remains untrusted prompt data. Traces avoid secrets and vectors. Boto3 uses
 standard credential resolution. Paid generation and judging require explicit commands/config.
-Authentication, identity-provider integration, PII pipelines, production
+Authentication, identity-provider integration, semantic/LLM PII pipelines, production
 deployment, online evaluation, and formal regression gates remain future work.
