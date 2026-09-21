@@ -51,6 +51,77 @@ def test_alembic_history_has_one_head() -> None:
     assert list(scripts.walk_revisions()), "expected at least one application migration"
 
 
+def test_alembic_revision_ids_and_graph_are_version_table_compatible() -> None:
+    """Keep the linear graph compatible with Alembic's VARCHAR(32) version column."""
+
+    scripts = ScriptDirectory.from_config(Config("alembic.ini"))
+    revisions = list(scripts.walk_revisions())
+    heads = scripts.get_heads()
+
+    assert len(heads) == 1, f"expected one Alembic head, found {heads}"
+    assert revisions, "expected at least one application migration"
+
+    revision_ids = {migration.revision for migration in revisions}
+    assert len(revision_ids) == len(revisions), "Alembic revision IDs must be unique"
+
+    children_by_parent: dict[str, list[str]] = {
+        revision_id: [] for revision_id in revision_ids
+    }
+    bases: list[str] = []
+    parents_by_revision: dict[str, tuple[str, ...]] = {}
+
+    for migration in revisions:
+        revision_id = migration.revision
+        assert revision_id, "Alembic revision ID must be non-empty"
+        assert len(revision_id) <= 32, (
+            f"Alembic revision ID {revision_id!r} exceeds the default "
+            "alembic_version.version_num VARCHAR(32) limit"
+        )
+
+        down_revision = migration.down_revision
+        parents = (
+            ()
+            if down_revision is None
+            else (down_revision,)
+            if isinstance(down_revision, str)
+            else tuple(down_revision)
+        )
+        parents_by_revision[revision_id] = parents
+        assert len(parents) <= 1, (
+            f"Alembic migration {revision_id!r} has multiple parents: {parents}"
+        )
+
+        if not parents:
+            bases.append(revision_id)
+        for parent in parents:
+            assert parent in revision_ids, (
+                f"Alembic migration {revision_id!r} references missing "
+                f"down_revision {parent!r}"
+            )
+            children_by_parent[parent].append(revision_id)
+
+    assert len(bases) == 1, f"expected one Alembic base, found {bases}"
+    for parent, children in children_by_parent.items():
+        assert len(children) <= 1, (
+            f"Alembic history branches after {parent!r}: {children}"
+        )
+
+    visited: set[str] = set()
+    current_revision: str | None = heads[0]
+    while current_revision is not None:
+        assert current_revision not in visited, (
+            f"Alembic history contains a cycle at {current_revision!r}"
+        )
+        visited.add(current_revision)
+        parents = parents_by_revision[current_revision]
+        current_revision = parents[0] if parents else None
+
+    assert visited == revision_ids, (
+        "Alembic history is disconnected; unreachable revisions: "
+        f"{sorted(revision_ids - visited)}"
+    )
+
+
 @pytest.fixture
 def engine() -> Generator[Engine]:
     sqlite_engine = create_engine("sqlite+pysqlite:///:memory:")

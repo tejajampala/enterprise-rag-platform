@@ -1,6 +1,6 @@
 """Persist access policy with immutable document versions.
 
-Revision ID: 0003_document_version_access_policy
+Revision ID: 0003_access_policy
 Revises: 0002_managed_index_generations
 Create Date: 2026-09-21
 """
@@ -13,7 +13,7 @@ import sqlalchemy as sa
 from alembic import op
 from sqlalchemy.dialects import postgresql
 
-revision: str = "0003_document_version_access_policy"
+revision: str = "0003_access_policy"
 down_revision: str | None = "0002_managed_index_generations"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None

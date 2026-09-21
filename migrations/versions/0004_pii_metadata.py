@@ -1,7 +1,7 @@
 """Add immutable derived PII classification metadata.
 
-Revision ID: 0004_document_version_pii_metadata
-Revises: 0003_document_version_access_policy
+Revision ID: 0004_pii_metadata
+Revises: 0003_access_policy
 Create Date: 2026-09-21
 """
 
@@ -13,8 +13,8 @@ import sqlalchemy as sa
 from alembic import op
 from sqlalchemy.dialects import postgresql
 
-revision: str = "0004_document_version_pii_metadata"
-down_revision: str | None = "0003_document_version_access_policy"
+revision: str = "0004_pii_metadata"
+down_revision: str | None = "0003_access_policy"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
