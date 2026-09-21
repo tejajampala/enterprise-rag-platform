@@ -341,17 +341,35 @@ precedence), prints document/chunk/category counts, and rebuilds the dedicated
 `consumer_finance_evaluation` hybrid collection. Fixture mode remains isolated in
 `consumer_finance_phase1`. Downloaded pages and parsed corpus JSON remain ignored by Git.
 
-## Development checks
+## Validation
+
+Run the complete local validation path with:
 
 ```bash
+uv sync
 uv run ruff check .
 uv run mypy .
 uv run pytest
-docker compose config
+docker compose config --quiet
 ```
 
-Tests mock external systems and require no Qdrant server, MLflow server, internet, AWS credentials,
-or paid calls.
+Run the focused Phase 3 two-generation lifecycle regression with:
+
+```bash
+uv run pytest tests/test_phase3_end_to_end.py -v
+```
+
+The default test suite is deterministic and offline. It uses SQLite, in-memory Qdrant, and model
+doubles; it requires no `.env`, PostgreSQL/Qdrant/MLflow service, Hugging Face download, AWS
+credential, Bedrock call, MLflow judge, RAGAS judge, internet access, or paid operation.
+
+`.github/workflows/ci.yml` runs on every pull request and every push to `main`. It uses Python 3.12
+and `uv sync --frozen`, then runs Ruff, mypy, the complete pytest suite (including Phase 1/2
+compatibility, the Phase 3 lifecycle regression, and the SQLite Alembic upgrade/downgrade smoke
+test), Docker Compose configuration validation, and a clean-tree check. Repository branch
+protection should require the `CI / Offline validation` status check before merging to `main`.
+Migration execution on SQLite validates the current portable schema, but production PostgreSQL
+behavior still requires an operator-run migration against the target environment.
 
 ## Offline and online evaluation
 
@@ -364,7 +382,7 @@ Phase 3 currently provides the application PostgreSQL schema, deterministic plan
 transactional lineage/version persistence, an explicit immutable managed-index publisher, and an
 explicit generation-pinned managed runtime profile. Restoration, automatic runtime reload,
 concurrent apply locking, cleanup/retention, ACLs, PII handling, production deployment, and formal
-CI regression gates remain future work. Kafka, Airflow, Kubernetes, Supabase, OpenSearch, and
+release thresholds remain future work. Kafka, Airflow, Kubernetes, Supabase, OpenSearch, and
 additional orchestration frameworks remain out of scope.
 
 See [architecture details](docs/architecture.md) and the

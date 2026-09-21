@@ -9,6 +9,7 @@ from uuid import UUID, uuid4
 import pytest
 from alembic import command
 from alembic.config import Config
+from alembic.script import ScriptDirectory
 from sqlalchemy import Engine, create_engine, event, inspect, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -35,6 +36,17 @@ APPLICATION_TABLES = {
     "ingestion_run_documents",
     "ingestion_runs",
 }
+
+
+def test_alembic_history_has_one_head() -> None:
+    """Reject migration branches before a database connection is needed."""
+
+    scripts = ScriptDirectory.from_config(Config("alembic.ini"))
+    heads = scripts.get_heads()
+
+    assert len(heads) == 1, f"expected one Alembic head, found {heads}"
+    assert scripts.get_current_head() == heads[0]
+    assert list(scripts.walk_revisions()), "expected at least one application migration"
 
 
 @pytest.fixture
