@@ -12,6 +12,7 @@ from qdrant_client import QdrantClient
 
 from consumer_finance_rag.config import AppSettings, EmbeddingModelSettings
 from consumer_finance_rag.lineage.fingerprints import (
+    PAYLOAD_SCHEMA_VERSION,
     ManagedIndexConfiguration,
     embedding_fingerprint,
     managed_index_configuration_identity,
@@ -171,6 +172,7 @@ def build_managed_retrieval_runtime(
         settings=settings.retrieval,
         tracer=tracer,
         collection_name=active.qdrant_collection,
+        access_control_enabled=True,
     )
     return ManagedRetrievalRuntime(
         index_state_id=active.index_state_id,
@@ -232,6 +234,10 @@ def _validate_active_metadata(
             "ACTIVE index configuration fingerprint does not match its payload"
         )
     configuration = _parse_configuration(raw_configuration)
+    if configuration.payload_schema_version != PAYLOAD_SCHEMA_VERSION:
+        raise CorruptActiveManagedIndexError(
+            "ACTIVE managed index uses an unsupported payload schema; publish a new generation"
+        )
     canonical_identity = managed_index_configuration_identity(configuration)
     if canonical_identity.payload != raw_configuration:
         raise CorruptActiveManagedIndexError(

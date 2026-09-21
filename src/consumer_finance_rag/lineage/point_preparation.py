@@ -8,6 +8,7 @@ from numbers import Real
 from types import MappingProxyType
 from uuid import UUID
 
+from consumer_finance_rag.access import access_policy_payload
 from consumer_finance_rag.lineage.fingerprints import (
     PAYLOAD_SCHEMA_VERSION,
     POINT_ID_FORMAT_VERSION,
@@ -371,4 +372,5 @@ def _current_payload(
         "chunking_fingerprint": chunk.chunking_fingerprint,
         "point_id_format_version": identity.point_id_format_version,
         "payload_schema_version": identity.payload_schema_version,
+        **access_policy_payload(chunk.access_policy),
     }

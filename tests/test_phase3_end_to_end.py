@@ -12,6 +12,11 @@ from qdrant_client import QdrantClient
 from sqlalchemy import Engine, create_engine, event, func, select
 from sqlalchemy.orm import Session, sessionmaker
 
+from consumer_finance_rag.access import (
+    AccessContext,
+    AccessVisibility,
+    DocumentAccessPolicy,
+)
 from consumer_finance_rag.acquisition import SourceRecord
 from consumer_finance_rag.chunking import ParagraphChunker
 from consumer_finance_rag.config import AppSettings, load_settings
@@ -449,6 +454,197 @@ def test_two_generation_managed_lifecycle_is_incremental_and_pinned(
     assert "consumer_finance_evaluation" not in collection_names
 
 
+def test_acl_filtered_retrieval_and_acl_only_generation_are_pinned(
+    engine: Engine,
+) -> None:
+    sessions = sessionmaker(bind=engine, class_=Session, expire_on_commit=False)
+    settings = build_test_settings()
+    qdrant = QdrantClient(":memory:")
+    embedding = DeterministicEmbeddingProvider(settings.models.embedding.model)
+    publisher = build_publisher(sessions, settings, qdrant, embedding)
+    restricted_fraud = DocumentAccessPolicy(
+        visibility=AccessVisibility.RESTRICTED,
+        allowed_groups=frozenset({"fraud-analysts", "audit-reviewers"}),
+    )
+    restricted_service = DocumentAccessPolicy(
+        visibility=AccessVisibility.RESTRICTED,
+        allowed_groups=frozenset({"customer-service"}),
+    )
+    first_records = (
+        SourceRecord(
+            source_id="public-cards",
+            title="Public card guidance",
+            source_url="https://example.test/public-cards",
+            category="credit-cards",
+            source_version="v1",
+            text="Omega public card replacement guidance.",
+        ),
+        SourceRecord(
+            source_id="fraud-only",
+            title="Restricted fraud procedure",
+            source_url="https://example.test/fraud-only",
+            category="payments-fraud",
+            source_version="v1",
+            text="Alpha fraud dispute investigation procedure.",
+            access_policy=restricted_fraud,
+        ),
+        SourceRecord(
+            source_id="service-only",
+            title="Restricted mortgage procedure",
+            source_url="https://example.test/service-only",
+            category="mortgages",
+            source_version="v1",
+            text="Mortgage escrow customer service procedure.",
+            access_policy=restricted_service,
+        ),
+    )
+
+    first = apply_snapshot(sessions, first_records)
+    generation_1 = publisher.publish(first.manifest, first.result.run_id)
+    assert generation_1.bm25_action is BM25PlanAction.REFIT
+    runtime_g1, _, reranker_g1 = build_runtime(sessions, settings, qdrant)
+
+    query = "omega alpha fraud dispute mortgage escrow customer service"
+
+    def sources(
+        runtime: ManagedRetrievalRuntime,
+        context: AccessContext | None,
+    ) -> set[str]:
+        trace = runtime.retrieval_service.retrieve_debug(
+            query,
+            top_k=10,
+            access_context=context,
+        )
+        return {str(item.chunk.metadata["source_id"]) for item in trace.reranked}
+
+    assert sources(runtime_g1, None) == {"public-cards"}
+    assert sources(
+        runtime_g1,
+        AccessContext(groups=frozenset({"fraud-analysts"})),
+    ) == {
+        "public-cards",
+        "fraud-only",
+    }
+    assert sources(
+        runtime_g1,
+        AccessContext(groups=frozenset({"customer-service"})),
+    ) == {
+        "public-cards",
+        "service-only",
+    }
+    assert sources(
+        runtime_g1,
+        AccessContext(
+            groups=frozenset({"customer-service", "FRAUD-ANALYSTS"})
+        ),
+    ) == {"public-cards", "fraud-only", "service-only"}
+    assert all(
+        set(call[1])
+        <= {
+            chunk.compatibility_chunk_id
+            for chunk in first.manifest.chunks
+        }
+        for call in reranker_g1.calls
+    )
+
+    second_records = (
+        first_records[0].model_copy(update={"access_policy": restricted_fraud}),
+        first_records[1],
+        first_records[2],
+    )
+    second = apply_snapshot(sessions, second_records)
+    assert second.result.changed_count == 1
+    assert second.result.unchanged_count == 2
+    with sessions() as session:
+        public_document = session.scalar(
+            select(LineageDocument).where(
+                LineageDocument.source_id == "public-cards"
+            )
+        )
+        assert public_document is not None
+        versions = list(
+            session.scalars(
+                select(DocumentVersion)
+                .where(DocumentVersion.document_pk == public_document.document_pk)
+                .order_by(DocumentVersion.version_number)
+            )
+        )
+        assert [version.version_number for version in versions] == [1, 2]
+        assert versions[0].content_hash == versions[1].content_hash
+        assert versions[0].metadata_hash != versions[1].metadata_hash
+        assert versions[0].access_visibility == "PUBLIC"
+        assert versions[1].access_visibility == "RESTRICTED"
+        classification = session.scalar(
+            select(IngestionRunDocument).where(
+                IngestionRunDocument.run_id == second.result.run_id,
+                IngestionRunDocument.document_pk == public_document.document_pk,
+            )
+        )
+        assert classification is not None
+        assert classification.content_changed is False
+        assert classification.metadata_changed is True
+
+    embedded_before = embedding.embedded_document_count
+    generation_2 = publisher.publish(second.manifest, second.result.run_id)
+    assert generation_2.outcome is ManagedIndexPublishOutcome.PUBLISHED
+    assert generation_2.generation == 2
+    assert generation_2.bm25_action is BM25PlanAction.REUSE
+    assert generation_2.dense_reused_count == second.manifest.chunk_count
+    assert generation_2.dense_computed_count == 0
+    assert embedding.embedded_document_count == embedded_before
+    assert_generation_invariants(sessions, qdrant, generation_1, "RETIRED")
+    assert_generation_invariants(sessions, qdrant, generation_2, "ACTIVE")
+
+    def payload_for(collection: str, source_id: str) -> dict[str, Any]:
+        records, _ = qdrant.scroll(
+            collection_name=collection,
+            limit=100,
+            with_payload=True,
+            with_vectors=False,
+        )
+        return next(
+            dict(record.payload or {})
+            for record in records
+            if (record.payload or {}).get("source_id") == source_id
+        )
+
+    old_payload = payload_for(generation_1.collection, "public-cards")
+    new_payload = payload_for(generation_2.collection, "public-cards")
+    assert old_payload["access_visibility"] == "PUBLIC"
+    assert old_payload["allowed_groups"] == []
+    assert new_payload["access_visibility"] == "RESTRICTED"
+    assert new_payload["allowed_groups"] == ["audit-reviewers", "fraud-analysts"]
+
+    runtime_g2, _, _ = build_runtime(sessions, settings, qdrant)
+    database_counts_before = lineage_counts(sessions)
+    qdrant_counts_before = {
+        generation_1.collection: qdrant.count(generation_1.collection, exact=True).count,
+        generation_2.collection: qdrant.count(generation_2.collection, exact=True).count,
+    }
+    assert sources(runtime_g2, None) == set()
+    assert sources(
+        runtime_g2,
+        AccessContext(groups=frozenset({"fraud-analysts"})),
+    ) == {
+        "public-cards",
+        "fraud-only",
+    }
+    assert sources(
+        runtime_g2,
+        AccessContext(groups=frozenset({"customer-service"})),
+    ) == {
+        "service-only"
+    }
+    assert sources(runtime_g1, None) == {"public-cards"}
+    assert runtime_g1.generation == 1
+    assert runtime_g2.generation == 2
+    assert lineage_counts(sessions) == database_counts_before
+    assert {
+        generation_1.collection: qdrant.count(generation_1.collection, exact=True).count,
+        generation_2.collection: qdrant.count(generation_2.collection, exact=True).count,
+    } == qdrant_counts_before
+
+
 def build_test_settings() -> AppSettings:
     base = load_settings("config/config.yaml")
     return base.model_copy(
@@ -731,3 +927,20 @@ def validate_bm25_state(state: IndexState, manifest: ActiveChunkManifest) -> Non
 def index_state_count(sessions: sessionmaker[Session]) -> int:
     with sessions() as session:
         return session.scalar(select(func.count()).select_from(IndexState)) or 0
+
+
+def lineage_counts(sessions: sessionmaker[Session]) -> tuple[int, ...]:
+    with sessions() as session:
+        return tuple(
+            session.scalar(select(func.count()).select_from(model)) or 0
+            for model in (
+                Corpus,
+                IngestionRun,
+                LineageDocument,
+                DocumentVersion,
+                LineageChunk,
+                IngestionRunDocument,
+                IndexState,
+                IndexStateChunk,
+            )
+        )

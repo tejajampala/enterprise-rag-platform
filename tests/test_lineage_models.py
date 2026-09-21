@@ -189,6 +189,10 @@ def make_index_state(
 
 def test_metadata_creates_all_application_tables(engine: Engine) -> None:
     assert set(inspect(engine).get_table_names()) == APPLICATION_TABLES
+    version_columns = {
+        column["name"] for column in inspect(engine).get_columns("document_versions")
+    }
+    assert {"access_visibility", "allowed_groups"}.issubset(version_columns)
     columns = {column["name"] for column in inspect(engine).get_columns("index_states")}
     assert {
         "bm25_state",
@@ -197,6 +201,17 @@ def test_metadata_creates_all_application_tables(engine: Engine) -> None:
         "error_message",
         "failed_at",
     }.issubset(columns)
+
+
+def test_document_version_defaults_to_public_access(session: Session) -> None:
+    corpus = make_corpus(session)
+    run = make_run(session, corpus)
+    document = make_document(session, corpus, run)
+
+    version = make_version(session, document, run)
+
+    assert version.access_visibility == "PUBLIC"
+    assert version.allowed_groups == []
 
 
 def test_domain_statuses_reject_unknown_values() -> None:
@@ -550,3 +565,94 @@ def test_alembic_revision_preserves_unrelated_tables(
     inspection_engine.dispose()
     assert not APPLICATION_TABLES.intersection(remaining_tables)
     assert "unrelated_mlflow_table" in remaining_tables
+
+
+def test_acl_migration_preserves_existing_versions_with_public_default(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    database_path = tmp_path / "acl-migration.sqlite"
+    database_url = f"sqlite+pysqlite:///{database_path.as_posix()}"
+    monkeypatch.setenv("RAG__DATABASE__URL", database_url)
+    alembic_config = Config("alembic.ini")
+    command.upgrade(alembic_config, "0002_managed_index_generations")
+    migration_engine = create_engine(database_url)
+    corpus_id = "00000000000000000000000000000001"
+    run_id = "00000000000000000000000000000002"
+    document_pk = "00000000000000000000000000000003"
+    version_id = "00000000000000000000000000000004"
+    with migration_engine.begin() as connection:
+        connection.execute(
+            text(
+                "INSERT INTO corpora "
+                "(corpus_id, corpus_key, qdrant_collection_prefix) "
+                "VALUES (:id, 'acl-test', 'acl_test')"
+            ),
+            {"id": corpus_id},
+        )
+        connection.execute(
+            text(
+                "INSERT INTO ingestion_runs "
+                "(run_id, corpus_id, status, authoritative_snapshot) "
+                "VALUES (:run, :corpus, 'SUCCEEDED', 1)"
+            ),
+            {"run": run_id, "corpus": corpus_id},
+        )
+        connection.execute(
+            text(
+                "INSERT INTO documents "
+                "(document_pk, corpus_id, source_key, source_id, state, "
+                "first_seen_run_id, last_seen_run_id) "
+                "VALUES (:document, :corpus, 'source', 'source', 'ACTIVE', :run, :run)"
+            ),
+            {"document": document_pk, "corpus": corpus_id, "run": run_id},
+        )
+        connection.execute(
+            text(
+                "INSERT INTO document_versions "
+                "(document_version_id, document_pk, version_number, content_hash, "
+                "metadata_hash, version_hash, compatibility_document_id, title, "
+                "category, source_version, normalized_text, created_run_id) "
+                "VALUES (:version, :document, 1, :content, :metadata, :combined, "
+                "'legacy-document', 'Legacy title', 'credit-cards', 'v1', "
+                "'Legacy text', :run)"
+            ),
+            {
+                "version": version_id,
+                "document": document_pk,
+                "content": "a" * 64,
+                "metadata": "b" * 64,
+                "combined": "c" * 64,
+                "run": run_id,
+            },
+        )
+    migration_engine.dispose()
+
+    command.upgrade(alembic_config, "head")
+
+    inspection_engine = create_engine(database_url)
+    with inspection_engine.connect() as connection:
+        row = connection.execute(
+            text(
+                "SELECT access_visibility, allowed_groups FROM document_versions "
+                "WHERE document_version_id = :version"
+            ),
+            {"version": version_id},
+        ).one()
+    inspection_engine.dispose()
+    assert row.access_visibility == "PUBLIC"
+    assert row.allowed_groups == "[]"
+
+    command.downgrade(alembic_config, "0002_managed_index_generations")
+    inspection_engine = create_engine(database_url)
+    columns = {
+        column["name"]
+        for column in inspect(inspection_engine).get_columns("document_versions")
+    }
+    with inspection_engine.connect() as connection:
+        assert connection.execute(
+            text("SELECT count(*) FROM document_versions")
+        ).scalar_one() == 1
+    inspection_engine.dispose()
+    assert "access_visibility" not in columns
+    assert "allowed_groups" not in columns

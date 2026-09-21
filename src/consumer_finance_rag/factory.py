@@ -231,6 +231,7 @@ def _retrieval_with_tracer(
         settings=service.settings,
         tracer=tracer,
         collection_name=service.collection_name,
+        access_control_enabled=service.access_control_enabled,
     )
 
 

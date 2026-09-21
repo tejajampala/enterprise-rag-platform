@@ -6,6 +6,8 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from consumer_finance_rag.access import DocumentAccessPolicy, public_access_policy
+
 
 class Document(BaseModel):
     """A normalized source document with a deterministic identity and hash."""
@@ -20,6 +22,7 @@ class Document(BaseModel):
     text: str
     source_version: str
     content_hash: str
+    access_policy: DocumentAccessPolicy = Field(default_factory=public_access_policy)
 
 
 class Chunk(BaseModel):

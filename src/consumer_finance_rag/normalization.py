@@ -30,6 +30,7 @@ def normalize_record(record: SourceRecord) -> Document:
         text=text,
         source_version=record.source_version,
         content_hash=content_hash,
+        access_policy=record.access_policy,
     )
 
 

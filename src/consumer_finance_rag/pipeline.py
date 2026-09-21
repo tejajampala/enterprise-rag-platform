@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from consumer_finance_rag.access import AccessContext
 from consumer_finance_rag.context import ContextBuilder
 from consumer_finance_rag.models import ModelMetadata, RAGResponse
 from consumer_finance_rag.observability import NoOpTracer, Tracer
@@ -30,7 +31,12 @@ class RAGPipeline:
         self.tracer = tracer or NoOpTracer()
         self.trace_attributes = trace_attributes or {}
 
-    def answer(self, question: str) -> RAGResponse:
+    def answer(
+        self,
+        question: str,
+        *,
+        access_context: AccessContext | None = None,
+    ) -> RAGResponse:
         attributes: dict[str, object] = {
             "embedding.model": self.embedding_provider.model_name,
             "reranker.model": self.reranker.model_name,
@@ -40,7 +46,10 @@ class RAGPipeline:
         }
         with self.tracer.span("rag_request", span_type="CHAIN", attributes=attributes) as span:
             span.set_inputs({"question": question})
-            retrieval_result = self.retrieval.retrieve(question)
+            retrieval_result = self.retrieval.retrieve(
+                question,
+                access_context=access_context,
+            )
             context = self.context_builder.build(retrieval_result.chunks)
             result = self.llm.generate(SYSTEM_PROMPT, build_user_prompt(question, context.text))
             response = RAGResponse(

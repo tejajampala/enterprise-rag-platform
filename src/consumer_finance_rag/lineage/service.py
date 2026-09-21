@@ -332,6 +332,7 @@ class LineageApplyService:
             current.source_version,
             current.text,
             run_id,
+            access_policy=current.access_policy,
         )
         self._repository.create_chunks(
             version.document_version_id,

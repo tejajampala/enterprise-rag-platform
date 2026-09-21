@@ -95,7 +95,13 @@ class QdrantHybridStore:
             )
         self.client.upsert(collection_name=self.settings.collection_name, points=points, wait=True)
 
-    def search_dense(self, vector: list[float], limit: int) -> list[RetrievedChunk]:
+    def search_dense(
+        self,
+        vector: list[float],
+        limit: int,
+        *,
+        query_filter: models.Filter | None = None,
+    ) -> list[RetrievedChunk]:
         result = self.client.query_points(
             collection_name=self.settings.collection_name,
             query=vector,
@@ -106,11 +112,17 @@ class QdrantHybridStore:
                 hnsw_ef=self.query_hnsw_ef or max(limit * 2, 32),
                 exact=False,
             ),
+            query_filter=query_filter,
         )
         return self._to_retrieved(result.points, rank_kind="dense")
 
     def search_sparse(
-        self, query: str, encoder: BM25SparseEncoder, limit: int
+        self,
+        query: str,
+        encoder: BM25SparseEncoder,
+        limit: int,
+        *,
+        query_filter: models.Filter | None = None,
     ) -> list[RetrievedChunk]:
         sparse = encoder.encode_query(query)
         if not sparse.indices:
@@ -121,6 +133,7 @@ class QdrantHybridStore:
             using=self.settings.sparse_vector_name,
             limit=limit,
             with_payload=True,
+            query_filter=query_filter,
         )
         return self._to_retrieved(result.points, rank_kind="sparse")
 
@@ -166,6 +179,8 @@ class QdrantHybridStore:
                     "category": payload.get("category"),
                     "source_url": payload.get("source_url"),
                     "source_id": payload.get("source_id"),
+                    "access_visibility": payload.get("access_visibility"),
+                    "allowed_groups": payload.get("allowed_groups"),
                 },
             )
             retrieved.append(

@@ -120,7 +120,9 @@ def prepared_point(index: int = 0, *, generation: int = 1) -> ManagedPointInput:
             "index_state_id": str(index_state_id),
             "chunking_fingerprint": chunk.chunking_fingerprint,
             "point_id_format_version": "lineage-chunk-uuid5-v1",
-            "payload_schema_version": "managed-qdrant-payload-v1",
+            "payload_schema_version": "managed-qdrant-payload-v2",
+            "access_visibility": "PUBLIC",
+            "allowed_groups": [],
         },
     )
 
@@ -254,7 +256,9 @@ def test_one_point_upsert_contains_legacy_and_lineage_payload(
     assert payload["index_state_id"] == str(point.index_state_id)
     assert payload["chunking_fingerprint"] == point.chunk.chunking_fingerprint
     assert payload["point_id_format_version"] == "lineage-chunk-uuid5-v1"
-    assert payload["payload_schema_version"] == "managed-qdrant-payload-v1"
+    assert payload["payload_schema_version"] == "managed-qdrant-payload-v2"
+    assert payload["access_visibility"] == "PUBLIC"
+    assert payload["allowed_groups"] == []
 
 
 def test_batched_upsert_waits_and_preserves_all_points(

@@ -5,10 +5,12 @@ from __future__ import annotations
 import uuid
 from collections.abc import Mapping
 from dataclasses import dataclass
+from dataclasses import field as dataclass_field
 from enum import StrEnum
 from typing import Any
 from uuid import UUID
 
+from consumer_finance_rag.access import DocumentAccessPolicy, public_access_policy
 from consumer_finance_rag.lineage.fingerprints import (
     PAYLOAD_SCHEMA_VERSION,
     POINT_ID_FORMAT_VERSION,
@@ -45,6 +47,9 @@ class ActiveDocumentVersion:
     metadata_hash: str
     version_hash: str
     compatibility_document_id: str
+    access_policy: DocumentAccessPolicy = dataclass_field(
+        default_factory=public_access_policy
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -68,6 +73,9 @@ class ActiveChunk:
     chunk_hash: str
     text: str
     chunking_fingerprint: str
+    access_policy: DocumentAccessPolicy = dataclass_field(
+        default_factory=public_access_policy
+    )
 
 
 @dataclass(frozen=True, slots=True)

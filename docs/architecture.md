@@ -26,8 +26,8 @@ schema records managed corpora, ingestion attempts, stable logical documents, im
 versions and chunks, per-run document classifications, and immutable Qdrant index generations with
 their chunk membership. Application UUIDs connect versions across the existing content-derived
 compatibility IDs. This milestone advances lineage persistence only: change classification
-planning and the first transactional lineage write path are implemented. Vector reuse, index
-activation, Qdrant mutation, and BM25 refresh are not implemented.
+planning and the transactional lineage write path are implemented, followed by explicit managed
+generation publication, activation, vector reuse, BM25 lifecycle management, and retrieval.
 
 The managed-ingestion write boundary is deliberately small:
 
@@ -47,7 +47,7 @@ application PostgreSQL
 `LineageRepository` persists caller-supplied lineage facts and flushes them without committing.
 It does not calculate classifications or commit transactions. `LineageApplyService` consumes the
 existing pure `ChangePlan`; it does not reclassify documents. Qdrant publishing and BM25 lifecycle
-management remain unimplemented.
+management are separate responsibilities owned by `ManagedIndexService`.
 
 Source change planning is a separate pure business-logic boundary:
 
@@ -451,7 +451,7 @@ and physical validation. Validation checks collection vector configuration, poin
 payload, dense presence/dimension/finiteness, and sparse identity/weights using explicit
 float32-appropriate tolerances. The adapter does not fit BM25, call embedding providers, decide
 dense reuse, create or transition PostgreSQL index states, or activate a generation. Full managed
-publishing orchestration remains unimplemented.
+publishing orchestration is implemented by `ManagedIndexService`, not this storage adapter.
 
 Fixture and evaluation indexes are deliberately distinct. `scripts/ingest.py --mode fixture`
 writes `consumer_finance_phase1` plus `data/index/bm25_state.json`.
@@ -562,6 +562,61 @@ ignored by Git and network acquisition never runs in unit tests. The retrieval e
 qrels against this same assembled snapshot, verifies its dedicated persisted index, and records its
 mode, document, chunk, and category counts.
 
+## Managed retrieval authorization
+
+Authentication and identity-provider integration are outside this milestone. A caller resolves
+identity facts into the immutable request-scoped `AccessContext`; the generation-scoped runtime
+never stores a process-global user identity.
+
+```text
+Identity provider / application
+        |
+        v
+resolved AccessContext
+        |
+        v
+managed HybridRetrievalService
+        |
+        v
+one Qdrant ACL filter
+        +--> dense HNSW/ANN search
+        +--> sparse BM25 search
+        |
+        v
+RRF -> reranker -> authorized contexts
+```
+
+`DocumentAccessPolicy` supports `PUBLIC` and group-based `RESTRICTED` content. Group identifiers
+are trimmed, case-folded, deduplicated, and sorted for persistence and hashing; empty identifiers,
+restricted policies without groups, and public policies with groups are rejected. PostgreSQL stores
+`access_visibility` and `allowed_groups` on each immutable `document_versions` row. The v0003
+migration assigns existing rows the backward-compatible `PUBLIC` policy.
+
+Chunks inherit their owning document version's policy. Managed payload schema v2 serializes the
+explicit `access_visibility` and sorted `allowed_groups`; no principal identity or secret is
+persisted in Qdrant. At query time, a point is eligible when it is public, or when it is restricted
+and its allowed-group array contains any caller group. The identical typed Qdrant filter object is
+passed to both candidate searches before fusion. Managed results are also validated against the
+request context as defense in depth, but Python-side validation is not the primary enforcement.
+Fixture and evaluation services do not enable ACL filtering, so their legacy points remain
+backward-compatible.
+
+The security invariants are:
+
+1. Authorization is applied before dense retrieval.
+2. Authorization is applied before sparse retrieval.
+3. Unauthorized candidates never enter RRF or reranking.
+4. Missing access context is public-only, never unrestricted.
+5. Policy changes create immutable document-version history.
+6. Old index generations retain their historical policy payload.
+7. Runtime generation pinning also pins ACL payload state.
+
+Access policy is part of the version metadata fingerprint. Consequently, changing `PUBLIC` to
+`RESTRICTED`, or changing the canonical group set, creates a metadata-only document version while
+leaving `content_hash` unchanged. The active-manifest hash includes policy, so a new immutable
+managed generation is published. If ordered chunk text is unchanged, whole-corpus BM25 state and
+exact-text dense vectors are reused; new points still carry fresh lineage IDs and ACL payload.
+
 Hugging Face providers retain their model object after lazy initialization. One evaluation process
 constructs one retrieval service, explicitly warms its embedding and reranker once through the
 same provider interfaces, and reuses both across all cases. `--max-cases` changes only the selected
@@ -571,5 +626,5 @@ case list; it does not create an evaluator-specific retrieval implementation.
 
 Retrieved content remains untrusted prompt data. Traces avoid secrets and vectors. Boto3 uses
 standard credential resolution. Paid generation and judging require explicit commands/config.
-Authentication, ACLs, PII pipelines, managed Qdrant/BM25 indexing, production
+Authentication, identity-provider integration, PII pipelines, production
 deployment, online evaluation, and formal regression gates remain future work.

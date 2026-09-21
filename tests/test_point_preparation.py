@@ -599,6 +599,8 @@ def test_point_ids_payloads_and_results_are_deterministic_and_complete() -> None
         "chunking_fingerprint",
         "point_id_format_version",
         "payload_schema_version",
+        "access_visibility",
+        "allowed_groups",
     }
 
     assert first == second

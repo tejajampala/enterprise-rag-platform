@@ -4,6 +4,8 @@ from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
 from typing import Any
 
+from qdrant_client import models
+
 from consumer_finance_rag.bedrock import BedrockLLMProvider
 from consumer_finance_rag.config import RetrievalSettings
 from consumer_finance_rag.context import ContextBuilder
@@ -81,12 +83,25 @@ class FakeStore:
     def __init__(self, candidate: RetrievedChunk) -> None:
         self.candidate = candidate
 
-    def search_dense(self, vector: list[float], limit: int) -> list[RetrievedChunk]:
+    def search_dense(
+        self,
+        vector: list[float],
+        limit: int,
+        *,
+        query_filter: models.Filter | None = None,
+    ) -> list[RetrievedChunk]:
+        del query_filter
         return [self.candidate.model_copy(update={"dense_rank": 1})]
 
     def search_sparse(
-        self, query: str, encoder: BM25SparseEncoder, limit: int
+        self,
+        query: str,
+        encoder: BM25SparseEncoder,
+        limit: int,
+        *,
+        query_filter: models.Filter | None = None,
     ) -> list[RetrievedChunk]:
+        del query_filter
         return [self.candidate.model_copy(update={"sparse_rank": 1})]
 
 

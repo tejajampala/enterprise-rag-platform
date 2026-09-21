@@ -6,6 +6,14 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Protocol
 
+from qdrant_client import models
+
+from consumer_finance_rag.access import (
+    AccessContext,
+    access_policy_from_payload,
+    build_qdrant_access_filter,
+    is_access_allowed,
+)
 from consumer_finance_rag.config import RetrievalSettings
 from consumer_finance_rag.models import RetrievalMetadata, RetrievedChunk
 from consumer_finance_rag.observability import NoOpTracer, Tracer, chunk_summaries
@@ -14,11 +22,26 @@ from consumer_finance_rag.sparse import BM25SparseEncoder
 
 
 class HybridSearchStore(Protocol):
-    def search_dense(self, vector: list[float], limit: int) -> list[RetrievedChunk]: ...
+    def search_dense(
+        self,
+        vector: list[float],
+        limit: int,
+        *,
+        query_filter: models.Filter | None = None,
+    ) -> list[RetrievedChunk]: ...
 
     def search_sparse(
-        self, query: str, encoder: BM25SparseEncoder, limit: int
+        self,
+        query: str,
+        encoder: BM25SparseEncoder,
+        limit: int,
+        *,
+        query_filter: models.Filter | None = None,
     ) -> list[RetrievedChunk]: ...
+
+
+class AuthorizationInvariantError(RuntimeError):
+    """Raised when filtered managed retrieval returns malformed/unauthorized data."""
 
 
 def reciprocal_rank_fusion(
@@ -84,6 +107,7 @@ class HybridRetrievalService:
         settings: RetrievalSettings,
         tracer: Tracer | None = None,
         collection_name: str | None = None,
+        access_control_enabled: bool = False,
     ) -> None:
         self.embedding_provider = embedding_provider
         self.reranker = reranker
@@ -92,17 +116,40 @@ class HybridRetrievalService:
         self.settings = settings
         self.tracer = tracer or NoOpTracer()
         self.collection_name = collection_name
+        self.access_control_enabled = access_control_enabled
 
-    def retrieve(self, query: str, top_k: int | None = None) -> RetrievalResult:
-        trace = self.retrieve_debug(query, top_k=top_k)
+    def retrieve(
+        self,
+        query: str,
+        top_k: int | None = None,
+        *,
+        access_context: AccessContext | None = None,
+    ) -> RetrievalResult:
+        trace = self.retrieve_debug(
+            query,
+            top_k=top_k,
+            access_context=access_context,
+        )
         return RetrievalResult(chunks=trace.reranked, metadata=trace.metadata)
 
-    def retrieve_debug(self, query: str, top_k: int | None = None) -> RetrievalTrace:
+    def retrieve_debug(
+        self,
+        query: str,
+        top_k: int | None = None,
+        *,
+        access_context: AccessContext | None = None,
+    ) -> RetrievalTrace:
         """Run the production retrieval path while retaining each ranked stage."""
 
         final_contexts = self.settings.final_contexts if top_k is None else top_k
         if final_contexts <= 0:
             raise ValueError("top_k must be positive")
+        resolved_access = access_context or AccessContext()
+        query_filter = (
+            build_qdrant_access_filter(resolved_access)
+            if self.access_control_enabled
+            else None
+        )
         with self.tracer.span(
             "embed_query",
             span_type="EMBEDDING",
@@ -122,7 +169,12 @@ class HybridRetrievalService:
             },
         ) as span:
             span.set_inputs({"query": query})
-            dense = self.store.search_dense(query_vector, self.settings.dense_candidates)
+            dense = self.store.search_dense(
+                query_vector,
+                self.settings.dense_candidates,
+                query_filter=query_filter,
+            )
+            self._validate_authorized(dense, resolved_access, stage="dense")
             span.set_outputs(chunk_summaries(dense))
 
         with self.tracer.span(
@@ -138,8 +190,12 @@ class HybridRetrievalService:
         ) as span:
             span.set_inputs({"query": query})
             sparse = self.store.search_sparse(
-                query, self.sparse_encoder, self.settings.sparse_candidates
+                query,
+                self.sparse_encoder,
+                self.settings.sparse_candidates,
+                query_filter=query_filter,
             )
+            self._validate_authorized(sparse, resolved_access, stage="sparse")
             span.set_outputs(chunk_summaries(sparse))
 
         with self.tracer.span(
@@ -187,3 +243,24 @@ class HybridRetrievalService:
                 final_contexts=len(final),
             ),
         )
+
+    def _validate_authorized(
+        self,
+        candidates: Sequence[RetrievedChunk],
+        access_context: AccessContext,
+        *,
+        stage: str,
+    ) -> None:
+        if not self.access_control_enabled:
+            return
+        for candidate in candidates:
+            try:
+                policy = access_policy_from_payload(candidate.chunk.metadata)
+            except (TypeError, ValueError) as exc:
+                raise AuthorizationInvariantError(
+                    f"Managed {stage} result {candidate.chunk.chunk_id!r} has invalid ACL metadata"
+                ) from exc
+            if not is_access_allowed(policy, access_context):
+                raise AuthorizationInvariantError(
+                    f"Managed {stage} result {candidate.chunk.chunk_id!r} violated ACL filter"
+                )

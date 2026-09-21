@@ -7,6 +7,11 @@ import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
+from consumer_finance_rag.access import (
+    AccessVisibility,
+    DocumentAccessPolicy,
+    public_access_policy,
+)
 from consumer_finance_rag.config import ManagedIndexSettings
 
 DOCUMENT_METADATA_FINGERPRINT_VERSION = "document-metadata-v1"
@@ -19,7 +24,7 @@ MANAGED_INDEX_CONFIGURATION_FINGERPRINT_VERSION = "managed-index-configuration-v
 BM25_IMPLEMENTATION_VERSION = "client-bm25-v1"
 BM25_TOKENIZER_VERSION = "lowercase-alphanumeric-apostrophe-v1"
 POINT_ID_FORMAT_VERSION = "lineage-chunk-uuid5-v1"
-PAYLOAD_SCHEMA_VERSION = "managed-qdrant-payload-v1"
+PAYLOAD_SCHEMA_VERSION = "managed-qdrant-payload-v2"
 
 
 @dataclass(frozen=True, slots=True)
@@ -185,18 +190,24 @@ def metadata_hash(
     source_url: str | None,
     category: str,
     source_version: str,
+    access_policy: DocumentAccessPolicy | None = None,
 ) -> str:
-    """Fingerprint material source metadata using canonical JSON."""
+    """Fingerprint metadata, retaining the legacy hash shape for PUBLIC policy."""
 
-    return _canonical_fingerprint(
-        {
-            "category": category,
-            "fingerprint_version": DOCUMENT_METADATA_FINGERPRINT_VERSION,
-            "source_url": source_url,
-            "source_version": source_version,
-            "title": title,
+    policy = access_policy or public_access_policy()
+    payload: dict[str, object] = {
+        "category": category,
+        "fingerprint_version": DOCUMENT_METADATA_FINGERPRINT_VERSION,
+        "source_url": source_url,
+        "source_version": source_version,
+        "title": title,
+    }
+    if policy.visibility is not AccessVisibility.PUBLIC:
+        payload["access_policy"] = {
+            "allowed_groups": list(policy.canonical_groups),
+            "visibility": policy.visibility.value,
         }
-    )
+    return _canonical_fingerprint(payload)
 
 
 def version_hash(*, content_hash: str, metadata_hash: str) -> str:

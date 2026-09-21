@@ -258,6 +258,8 @@ def create_physical_collection(
                         "chunk_hash": "d" * 64,
                         "ordinal": 0,
                         "text": "fraud payment help",
+                        "access_visibility": "PUBLIC",
+                        "allowed_groups": [],
                     },
                 )
             ],

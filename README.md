@@ -43,8 +43,8 @@ port, and volume; it does not reuse MLflow's PostgreSQL database. Set `RAG__DATA
 when running Phase 3 database operations. Fixture ingestion, deterministic evaluation, retrieval,
 and normal application startup remain database-independent. The lineage schema, repository,
 pure change planner, and first transactional lineage write path are present. This write path records
-source observations and immutable versions only; managed Qdrant indexing and BM25 refresh are not
-yet implemented.
+source observations and immutable versions. The explicit managed publisher creates immutable
+Qdrant/BM25 generations, and the managed runtime resolves one ACTIVE generation.
 
 ### Retrieval foundations
 
@@ -226,6 +226,35 @@ If another generation becomes ACTIVE while the process is running, the current p
 pinned to its original collection/BM25 pair; restart the application to resolve the new ACTIVE
 generation. Automatic polling and hot reload are not implemented.
 
+### Managed retrieval access control
+
+Managed document versions carry an immutable `DocumentAccessPolicy`. Existing sources default to
+`PUBLIC`; a restricted source names one or more normalized groups. Authentication is deliberately
+outside this milestone: the caller supplies an already-resolved, request-scoped `AccessContext`.
+For example:
+
+```python
+from consumer_finance_rag.access import AccessContext
+
+result = managed_runtime.retrieval_service.retrieve(
+    "How should this fraud case be handled?",
+    access_context=AccessContext(
+        principal_id="user-123",
+        groups=frozenset({"fraud-analysts", "au-employees"}),
+    ),
+)
+```
+
+The same Qdrant authorization filter is applied before both dense and sparse candidate search.
+Missing access context is fail-safe and means public-only; it never means unrestricted. Phase 1
+fixture and Phase 2 evaluation profiles remain unfiltered and accept their legacy payloads.
+
+An ACL-only source change creates a new immutable document version and managed generation because
+the Qdrant payload changed. When ordered chunk text is identical, the publisher reuses the BM25
+state and all eligible dense vectors. Old generation-pinned runtimes retain the historical ACL
+payload; newly constructed runtimes resolve the newly ACTIVE generation. This is group-based
+authorization metadata, not user/group storage or authentication.
+
 ### Validate the complete Phase 3 lifecycle offline
 
 `tests/test_phase3_end_to_end.py` is the deterministic managed-lifecycle regression test. It uses
@@ -380,8 +409,9 @@ not claim production monitoring, quality gains, or release thresholds.
 
 Phase 3 currently provides the application PostgreSQL schema, deterministic planning,
 transactional lineage/version persistence, an explicit immutable managed-index publisher, and an
-explicit generation-pinned managed runtime profile. Restoration, automatic runtime reload,
-concurrent apply locking, cleanup/retention, ACLs, PII handling, production deployment, and formal
+explicit generation-pinned managed runtime profile with public/group Qdrant pre-filtering.
+Authentication, restoration, automatic runtime reload, concurrent apply locking,
+cleanup/retention, PII handling, production deployment, and formal
 release thresholds remain future work. Kafka, Airflow, Kubernetes, Supabase, OpenSearch, and
 additional orchestration frameworks remain out of scope.
 

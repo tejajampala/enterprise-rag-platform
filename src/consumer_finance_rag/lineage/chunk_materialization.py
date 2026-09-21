@@ -202,6 +202,8 @@ def active_chunk_manifest_hash(
                 "ordinal": chunk.ordinal,
                 "source_key": chunk.source_key,
                 "text": chunk.text,
+                "access_visibility": chunk.access_policy.visibility.value,
+                "allowed_groups": list(chunk.access_policy.canonical_groups),
             }
             for chunk in ordered_chunks
         ],
@@ -213,6 +215,8 @@ def active_chunk_manifest_hash(
                 "source_key": document.source_key,
                 "version_hash": document.version_hash,
                 "version_number": document.version_number,
+                "access_visibility": document.access_policy.visibility.value,
+                "allowed_groups": list(document.access_policy.canonical_groups),
             }
             for document in ordered_documents
         ],
@@ -260,6 +264,7 @@ def _reconstruct_document(document: ActiveDocumentVersion) -> Document:
         text=document.normalized_text,
         source_version=document.source_version,
         content_hash=document.content_hash,
+        access_policy=document.access_policy,
     )
 
 
@@ -335,4 +340,5 @@ def _active_chunk(
         chunk_hash=chunk.chunk_hash,
         text=chunk.text,
         chunking_fingerprint=chunking_fingerprint_value,
+        access_policy=document.access_policy,
     )

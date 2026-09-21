@@ -152,6 +152,7 @@ def current_document_state(
         source_url=document.source_url,
         category=document.category,
         source_version=document.source_version,
+        access_policy=document.access_policy,
     )
     return CurrentDocumentState(
         source_key=source_key_for(document),

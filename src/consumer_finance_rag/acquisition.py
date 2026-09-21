@@ -6,7 +6,9 @@ import json
 from pathlib import Path
 from typing import Protocol
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
+
+from consumer_finance_rag.access import DocumentAccessPolicy, public_access_policy
 
 
 class SourceRecord(BaseModel):
@@ -20,6 +22,7 @@ class SourceRecord(BaseModel):
     category: str
     source_version: str
     text: str
+    access_policy: DocumentAccessPolicy = Field(default_factory=public_access_policy)
 
 
 class DocumentSource(Protocol):

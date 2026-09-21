@@ -11,6 +11,10 @@ from uuid import UUID
 from sqlalchemy import and_, func, select
 from sqlalchemy.orm import Session, selectinload
 
+from consumer_finance_rag.access import (
+    DocumentAccessPolicy,
+    public_access_policy,
+)
 from consumer_finance_rag.lineage.index_state import (
     IndexStateReadyMetadata,
     IndexStateValidationError,
@@ -310,6 +314,12 @@ class LineageRepository:
                     metadata_hash=version.metadata_hash,
                     version_hash=version.version_hash,
                     compatibility_document_id=version.compatibility_document_id,
+                    access_policy=DocumentAccessPolicy.model_validate(
+                        {
+                            "visibility": version.access_visibility,
+                            "allowed_groups": version.allowed_groups,
+                        }
+                    ),
                 )
             )
         return projected
@@ -436,6 +446,7 @@ class LineageRepository:
         source_version: str,
         normalized_text: str,
         created_run_id: UUID,
+        access_policy: DocumentAccessPolicy | None = None,
     ) -> DocumentVersion:
         """Persist precomputed immutable document-version values."""
 
@@ -458,6 +469,7 @@ class LineageRepository:
             raise LineageConflictError(
                 f"Document {document_pk} already has version hash {version_hash}"
             )
+        policy = access_policy or public_access_policy()
         version = DocumentVersion(
             document_pk=document_pk,
             version_number=version_number,
@@ -470,6 +482,8 @@ class LineageRepository:
             source_url=source_url,
             source_version=source_version,
             normalized_text=normalized_text,
+            access_visibility=policy.visibility.value,
+            allowed_groups=list(policy.canonical_groups),
             created_run_id=created_run_id,
         )
         self._session.add(version)

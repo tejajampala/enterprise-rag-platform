@@ -30,6 +30,7 @@ DOCUMENT_STATES = frozenset({"ACTIVE", "DELETED"})
 DOCUMENT_CHANGE_TYPES = frozenset({"NEW", "CHANGED", "UNCHANGED", "DELETED"})
 INDEX_STATE_STATUSES = frozenset({"BUILDING", "READY", "ACTIVE", "RETIRED", "FAILED"})
 DENSE_ACTIONS = frozenset({"COMPUTED", "REUSED"})
+ACCESS_VISIBILITIES = frozenset({"PUBLIC", "RESTRICTED"})
 PORTABLE_JSON = JSON().with_variant(JSONB(), "postgresql")
 
 
@@ -184,6 +185,10 @@ class DocumentVersion(Base):
             "document_pk", "version_hash", name="uq_document_versions_document_hash"
         ),
         CheckConstraint("version_number > 0", name="ck_document_versions_version_positive"),
+        CheckConstraint(
+            "access_visibility IN ('PUBLIC', 'RESTRICTED')",
+            name="ck_document_versions_access_visibility",
+        ),
     )
 
     document_version_id: Mapped[UUID] = mapped_column(Uuid, primary_key=True, default=uuid4)
@@ -200,6 +205,12 @@ class DocumentVersion(Base):
     source_url: Mapped[str | None] = mapped_column(Text)
     source_version: Mapped[str] = mapped_column(String(255), nullable=False)
     normalized_text: Mapped[str] = mapped_column(Text, nullable=False)
+    access_visibility: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="PUBLIC", server_default="PUBLIC"
+    )
+    allowed_groups: Mapped[list[str]] = mapped_column(
+        PORTABLE_JSON, nullable=False, default=list, server_default="[]"
+    )
     created_run_id: Mapped[UUID] = mapped_column(
         Uuid, ForeignKey("ingestion_runs.run_id"), nullable=False
     )
@@ -212,6 +223,14 @@ class DocumentVersion(Base):
     chunks: Mapped[list[LineageChunk]] = relationship(
         back_populates="document_version", order_by="LineageChunk.ordinal"
     )
+
+    @validates("access_visibility")
+    def validate_access_visibility(self, _key: str, value: str) -> str:
+        """Reject unsupported persisted visibility values."""
+
+        return _validate_domain_value(
+            "access_visibility", value, ACCESS_VISIBILITIES
+        )
 
 
 class LineageChunk(Base):

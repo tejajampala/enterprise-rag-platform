@@ -6,6 +6,7 @@ from typing import Any
 from uuid import uuid4
 
 import pytest
+from qdrant_client import models
 from sqlalchemy import create_engine
 
 from consumer_finance_rag.config import DatabaseSettings, RuntimeSettings, load_settings
@@ -54,8 +55,14 @@ class FakeReranker:
 
 
 class FakeStore:
-    def search_dense(self, vector: list[float], limit: int) -> list[RetrievedChunk]:
-        del vector, limit
+    def search_dense(
+        self,
+        vector: list[float],
+        limit: int,
+        *,
+        query_filter: models.Filter | None = None,
+    ) -> list[RetrievedChunk]:
+        del vector, limit, query_filter
         return []
 
     def search_sparse(
@@ -63,8 +70,10 @@ class FakeStore:
         query: str,
         encoder: BM25SparseEncoder,
         limit: int,
+        *,
+        query_filter: models.Filter | None = None,
     ) -> list[RetrievedChunk]:
-        del query, encoder, limit
+        del query, encoder, limit, query_filter
         return []
 
 
