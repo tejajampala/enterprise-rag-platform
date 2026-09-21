@@ -379,8 +379,60 @@ change.
 Cleanup never deletes or updates PostgreSQL lineage/index rows. A cleaned RETIRED generation and
 all `index_state_chunks`, document lineage, ACL history, and PII history remain queryable. The
 minimum age protects common generation-pinned process overlap only as a grace period; it is not a
-distributed lease. Runtime leases, rollback/reactivation, repair, and telemetry are deliberately
-deferred. No schema migration is required for this operations layer.
+distributed lease. Deleting a retired physical collection removes simple restoration capability;
+reconstruction from PostgreSQL/source history is future work.
+
+Managed generation restoration is a distinct operator workflow:
+
+```text
+Historical RETIRED generation
+             |
+             v
+      mutation-free restore plan
+             |
+             v
+      new BUILDING generation
+             |
+             v
+ copy historical dense/sparse vectors,
+ payload, membership, BM25, and configuration
+             |
+             v
+           READY
+             |
+             v
+ corpus lock + expected-ACTIVE re-check
+             |
+             v
+ new ACTIVE generation; previous ACTIVE -> RETIRED
+```
+
+`RETIRED -> ACTIVE` never occurs. Only a RETIRED source with a canonical, present, deeply valid
+physical collection is eligible. BUILDING, READY, FAILED, and ACTIVE sources are rejected. The
+planner validates persisted BM25/configuration fingerprints, exact membership and point counts,
+dense/sparse shape and data, payload schema, ACL/PII fields, and compatibility with the currently
+configured query embedding fingerprint. It does not silently upgrade historical formats.
+
+Confirmed execution allocates the next generation under the same corpus lock used by publication,
+creates a new immutable Qdrant collection, and records its own `index_state_chunks`. Dense vectors
+are copied and truthfully marked `REUSED`, with `dense_source_chunk_pk` referencing the historical
+chunk. BM25 state, state hash, and corpus hash are copied exactly; BM25 is never fit. Point IDs may
+repeat because they are chunk-derived and collection-scoped. Point payload is copied exactly apart
+from the required new `index_generation` and `index_state_id` identities.
+
+Migration `0005_restore_provenance` adds nullable `restored_from_index_state_id` and
+`restoration_reason` fields. The former is a self-reference to the historical `index_states` row;
+the source ingestion run remains content provenance and is not overloaded. No ingestion run,
+document version, or chunk is created, and source/document/ACL/PII lineage is unchanged. Thus the
+current source lineage can represent content B while serving a new generation copied from
+historical content A.
+
+The final transaction requires the candidate to remain READY, the historical source to remain
+RETIRED, and the ACTIVE row to match the plan baseline. Any concurrent publication aborts the
+switch and marks the candidate FAILED, leaving the unexpected newer ACTIVE untouched. Cleanup
+protects a RETIRED source referenced by a BUILDING/READY restoration candidate, then treats it and
+the newly retired former ACTIVE normally after restoration completes. Runtime leases, telemetry,
+and restoration from a cleaned collection remain deliberately deferred.
 
 Managed retrieval resolution is a separate, explicit factory boundary:
 

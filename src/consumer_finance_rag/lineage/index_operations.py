@@ -56,6 +56,7 @@ class CleanupClassification(StrEnum):
     ACTIVE_PROTECTED = "ACTIVE_PROTECTED"
     READY_PROTECTED = "READY_PROTECTED"
     BUILDING_PROTECTED = "BUILDING_PROTECTED"
+    RESTORATION_SOURCE_PROTECTED = "RESTORATION_SOURCE_PROTECTED"
     RETAINED = "RETAINED"
     RECENT = "RECENT"
     ELIGIBLE_RETIRED = "ELIGIBLE_RETIRED"
@@ -83,6 +84,7 @@ class GenerationCleanupState:
     qdrant_collection: str
     retired_at: datetime | None
     failed_at: datetime | None
+    restored_from_index_state_id: UUID | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -146,6 +148,8 @@ class ManagedGenerationStatus:
     retired_at: datetime | None
     failed_at: datetime | None
     error_message: str | None
+    restored_from_index_state_id: UUID | None
+    restoration_reason: str | None
     cleanup_classification: CleanupClassification
     cleanup_reason: str
 
@@ -230,6 +234,12 @@ def plan_generation_cleanup(
             reverse=True,
         )[:retained_retired_generations]
     }
+    in_progress_restoration_sources = {
+        state.restored_from_index_state_id
+        for state in ordered_states
+        if state.status in {"BUILDING", "READY"}
+        and state.restored_from_index_state_id is not None
+    }
     candidates: list[GenerationCleanupCandidate] = []
     registered_collections = {state.qdrant_collection for state in ordered_states}
 
@@ -245,6 +255,9 @@ def plan_generation_cleanup(
             physical_present=present,
             canonical=canonical,
             retained=state.index_state_id in newest_retired,
+            restoration_source=(
+                state.index_state_id in in_progress_restoration_sources
+            ),
             minimum_age=timedelta(hours=retired_cleanup_min_age_hours),
             now=current_time,
         )
@@ -377,6 +390,31 @@ class ManagedIndexOperationsService:
             issues=tuple(report_issues),
             generations=results,
         )
+
+    def validate_generation(
+        self,
+        generation: int,
+        *,
+        deep: bool = False,
+    ) -> ManagedGenerationValidationResult:
+        """Validate one persisted generation with the shared operations checks."""
+
+        with self._session_factory() as session:
+            corpus, states = self._load_states(session)
+            state = next(
+                (item for item in states if item.generation == generation),
+                None,
+            )
+            if state is None:
+                raise ManagedGenerationValidationError(
+                    f"Managed generation g{generation:06d} does not exist"
+                )
+            return self._validate_generation(
+                session,
+                state,
+                managed_prefix=corpus.qdrant_collection_prefix,
+                deep=deep,
+            )
 
     def execute_cleanup(
         self,
@@ -523,7 +561,9 @@ class ManagedIndexOperationsService:
             )
 
         configuration: ManagedIndexConfiguration | None = None
-        if state.status == "ACTIVE":
+        if state.status in {"ACTIVE", "RETIRED"} and (
+            state.status == "ACTIVE" or physical_present
+        ):
             try:
                 configuration, _ = validate_active_managed_index_metadata(state)
             except CorruptActiveManagedIndexError as exc:
@@ -534,7 +574,8 @@ class ManagedIndexOperationsService:
                 )
                 if calculated_corpus_hash != state.bm25_corpus_hash:
                     issues.append(
-                        "ACTIVE BM25 corpus hash does not match indexed membership texts"
+                        f"{state.status} BM25 corpus hash does not match indexed "
+                        "membership texts"
                     )
         elif state.index_configuration is not None:
             try:
@@ -615,6 +656,29 @@ class ManagedIndexOperationsService:
                 f"distance {metadata.distance_metric!r} != "
                 f"{configuration.distance_metric.lower()!r}"
             )
+        if metadata.hnsw_m is not None and metadata.hnsw_m != configuration.hnsw_m:
+            issues.append(f"HNSW m {metadata.hnsw_m} != {configuration.hnsw_m}")
+        if (
+            metadata.hnsw_ef_construct is not None
+            and metadata.hnsw_ef_construct != configuration.hnsw_ef_construct
+        ):
+            issues.append(
+                f"HNSW ef_construct {metadata.hnsw_ef_construct} != "
+                f"{configuration.hnsw_ef_construct}"
+            )
+        if metadata.sparse_modifier != configuration.sparse_modifier.lower():
+            issues.append(
+                f"sparse modifier {metadata.sparse_modifier!r} != "
+                f"{configuration.sparse_modifier.lower()!r}"
+            )
+        if (
+            metadata.sparse_on_disk is not None
+            and metadata.sparse_on_disk != configuration.sparse_on_disk
+        ):
+            issues.append(
+                f"sparse on_disk {metadata.sparse_on_disk} != "
+                f"{configuration.sparse_on_disk}"
+            )
         if point_count != state.chunk_count:
             issues.append(f"Qdrant point count {point_count} != {state.chunk_count}")
         if configuration.payload_schema_version != PAYLOAD_SCHEMA_VERSION:
@@ -689,10 +753,28 @@ class ManagedIndexOperationsService:
             "lineage_chunk_pk": str(chunk_pk),
             "chunking_fingerprint": state.chunking_fingerprint,
             "payload_schema_version": PAYLOAD_SCHEMA_VERSION,
+            "point_id_format_version": configuration.point_id_format_version,
         }
         for key, value in expected.items():
             if payload.get(key) != value:
                 issues.append(f"point {point_id} payload {key!r} mismatch")
+        for key in (
+            "document_id",
+            "chunk_id",
+            "document_version",
+            "title",
+            "source_id",
+            "source_key",
+            "chunk_hash",
+            "text",
+            "content_hash",
+            "source_version",
+            "lineage_document_pk",
+            "lineage_document_version_id",
+            "ingestion_run_id",
+        ):
+            if not isinstance(payload.get(key), str) or not payload[key]:
+                issues.append(f"point {point_id} payload {key!r} is missing or invalid")
         try:
             access_policy_from_payload(payload)
         except (TypeError, ValueError) as exc:
@@ -760,6 +842,7 @@ def _classify_generation(
     physical_present: bool,
     canonical: bool,
     retained: bool,
+    restoration_source: bool,
     minimum_age: timedelta,
     now: datetime,
 ) -> tuple[CleanupClassification, str]:
@@ -769,6 +852,11 @@ def _classify_generation(
         return CleanupClassification.READY_PROTECTED, "READY is never deleted"
     if state.status == "BUILDING":
         return CleanupClassification.BUILDING_PROTECTED, "BUILDING is never deleted"
+    if restoration_source:
+        return (
+            CleanupClassification.RESTORATION_SOURCE_PROTECTED,
+            "source physical collection is needed by an in-progress restoration",
+        )
     if not physical_present:
         return CleanupClassification.PHYSICAL_MISSING, "no physical cleanup required"
     if not canonical:
@@ -809,6 +897,8 @@ def _status_from_state(
         retired_at=state.retired_at,
         failed_at=state.failed_at,
         error_message=state.error_message,
+        restored_from_index_state_id=state.restored_from_index_state_id,
+        restoration_reason=state.restoration_reason,
         cleanup_classification=candidate.classification,
         cleanup_reason=candidate.reason,
     )
@@ -822,6 +912,7 @@ def _cleanup_state(state: IndexState) -> GenerationCleanupState:
         qdrant_collection=state.qdrant_collection,
         retired_at=state.retired_at,
         failed_at=state.failed_at,
+        restored_from_index_state_id=state.restored_from_index_state_id,
     )
 
 

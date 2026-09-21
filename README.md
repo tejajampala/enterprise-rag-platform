@@ -231,8 +231,35 @@ but not deleted. Phase 1 and evaluation collections are never considered managed
 The minimum age is a grace period for generation-pinned older processes, not proof that no process
 still uses the collection and not a distributed runtime lease. Each deletion re-locks/re-reads the
 corpus and recomputes eligibility to avoid deleting from a stale plan. Cleanup removes only an
-eligible Qdrant collection; PostgreSQL history remains immutable. Rollback/reactivation, runtime
-leases, repair, and monitoring are not implemented yet.
+eligible Qdrant collection; PostgreSQL history remains immutable. Deleting a RETIRED physical
+collection removes simple restoration capability for that generation, although its PostgreSQL
+audit history remains. Retention and minimum-age policy remain operator choices.
+
+Restore a historical, still-present RETIRED generation with the same operations CLI. The first
+command is a mutation-free plan; the second explicitly confirms collection creation and the
+traffic switch:
+
+```bash
+uv run python scripts/manage_index_generations.py --restore-generation 1
+uv run python scripts/manage_index_generations.py --restore-generation 1 --confirm
+```
+
+Restoration never performs `RETIRED -> ACTIVE`. It validates the historical metadata, membership,
+BM25 state/hash, collection shape, every point, ACL/PII payload, and current query-embedding
+compatibility, then creates a new monotonic generation and immutable collection. Dense vectors,
+sparse vectors, text, ACL/PII metadata, and the historical BM25/configuration identity are copied;
+no embedding, reranker, LLM, PII detector, source acquisition, or BM25 fit runs. The copied point
+payload retains historical content/provenance and changes only `index_generation` and
+`index_state_id` for the new physical generation.
+
+The source must be `RETIRED`; `BUILDING`, `READY`, `FAILED`, and `ACTIVE` sources are rejected. Its
+canonical physical collection must still exist, so restoration from cleaned PostgreSQL-only
+history is future rebuild-from-history work. The final corpus-locked transaction aborts if ACTIVE
+changed after planning, retires only the expected ACTIVE generation, and activates the READY
+candidate. The new `index_states.restored_from_index_state_id` self-reference and
+`restoration_reason` record audit provenance. Source lineage, ingestion runs, document versions,
+chunks, ACL policy, and PII classification are not rolled back or recreated; consequently source
+lineage may describe newer content than the restored serving index.
 
 ### Select the runtime retrieval profile
 
@@ -483,8 +510,10 @@ Phase 3 currently provides the application PostgreSQL schema, deterministic plan
 transactional lineage/version persistence, an explicit immutable managed-index publisher, and an
 explicit generation-pinned managed runtime profile with public/group Qdrant pre-filtering, plus
 operator status, bounded/deep validation, retention planning, and confirmed physical cleanup.
-Authentication, restoration, automatic runtime reload, concurrent apply locking,
-rollback/reactivation, runtime leases, semantic/LLM-based PII classification, production
+It also supports validated restoration of a present RETIRED physical generation into a new
+immutable ACTIVE generation. Authentication, rebuild from cleaned history, automatic runtime
+reload, concurrent apply locking, in-place reactivation, runtime leases, semantic/LLM-based PII
+classification, production
 deployment, and formal release thresholds remain future work. Kafka, Airflow, Kubernetes,
 Supabase, OpenSearch, and additional orchestration frameworks remain out of scope.
 

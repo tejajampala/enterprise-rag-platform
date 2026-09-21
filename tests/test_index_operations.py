@@ -11,9 +11,10 @@ from qdrant_client import QdrantClient, models
 from sqlalchemy import Engine, create_engine, event, func, select, text
 from sqlalchemy.orm import Session, sessionmaker
 
-from consumer_finance_rag.config import ManagedIndexSettings
+from consumer_finance_rag.config import EmbeddingModelSettings, ManagedIndexSettings
 from consumer_finance_rag.lineage.fingerprints import (
     ManagedIndexConfiguration,
+    embedding_fingerprint,
     managed_index_configuration_identity,
 )
 from consumer_finance_rag.lineage.index_operations import (
@@ -38,6 +39,15 @@ from consumer_finance_rag.lineage.models import (
     IngestionRun,
     LineageChunk,
     LineageDocument,
+)
+from consumer_finance_rag.lineage.repository import LineageRepository
+from consumer_finance_rag.lineage.restoration import (
+    ManagedGenerationRestorationService,
+    RestorationActivationConflictError,
+    RestorationBuildError,
+    RestorationSourceIneligibleError,
+    RestorationUnavailablePhysicalCleanedError,
+    RestorationValidationError,
 )
 from consumer_finance_rag.pii import DETERMINISTIC_PII_VERSION
 from consumer_finance_rag.sparse import (
@@ -341,6 +351,37 @@ def managed_point(
             "pii_types": [],
             "pii_detector_version": DETERMINISTIC_PII_VERSION,
         },
+    )
+
+
+def restoration_service(
+    environment: OperationsEnvironment,
+) -> tuple[ManagedGenerationRestorationService, ManagedIndexConfiguration]:
+    embedding_settings = EmbeddingModelSettings(
+        model="test/restoration-embedding",
+        device="cpu",
+        trust_remote_code=False,
+    )
+    fingerprint = embedding_fingerprint(
+        provider=embedding_settings.provider,
+        model=embedding_settings.model,
+        trust_remote_code=embedding_settings.trust_remote_code,
+        device=embedding_settings.device,
+    )
+    configuration = replace(
+        environment.configuration,
+        embedding_fingerprint=fingerprint,
+    )
+    return (
+        ManagedGenerationRestorationService(
+            session_factory=environment.sessions,
+            qdrant_client=environment.client,
+            corpus_key=CORPUS_KEY,
+            managed_index_settings=environment.settings,
+            embedding_settings=embedding_settings,
+            clock=lambda: NOW,
+        ),
+        configuration,
     )
 
 
@@ -882,3 +923,379 @@ def database_counts(environment: OperationsEnvironment) -> tuple[int, ...]:
             int(session.scalar(select(func.count()).select_from(table)) or 0)
             for table in tables
         )
+
+
+def test_retired_generation_produces_mutation_free_restore_plan(
+    environment: OperationsEnvironment,
+) -> None:
+    service, configuration = restoration_service(environment)
+    source_id = add_generation(
+        environment,
+        1,
+        "RETIRED",
+        retired_at=NOW - timedelta(days=2),
+        configuration=configuration,
+    )
+    add_generation(environment, 2, "ACTIVE", configuration=configuration)
+    before_db = database_counts(environment)
+    before_collections = tuple(
+        sorted(item.name for item in environment.client.get_collections().collections)
+    )
+
+    plan = service.plan(1)
+
+    assert plan.source_index_state_id == source_id
+    assert plan.source_generation == 1
+    assert plan.current_active_generation == 2
+    assert plan.proposed_generation == 3
+    assert plan.proposed_target_collection.endswith("_g000003")
+    assert plan.chunk_count == 1
+    assert database_counts(environment) == before_db
+    assert tuple(
+        sorted(item.name for item in environment.client.get_collections().collections)
+    ) == before_collections
+
+
+@pytest.mark.parametrize("status", ["ACTIVE", "READY", "BUILDING", "FAILED"])
+def test_restore_rejects_non_retired_sources(
+    environment: OperationsEnvironment,
+    status: str,
+) -> None:
+    service, configuration = restoration_service(environment)
+    add_generation(
+        environment,
+        1,
+        status,
+        failed_at=NOW if status == "FAILED" else None,
+        configuration=configuration,
+    )
+    if status != "ACTIVE":
+        add_generation(environment, 2, "ACTIVE", configuration=configuration)
+
+    with pytest.raises(RestorationSourceIneligibleError, match=status):
+        service.plan(1)
+
+
+def test_restore_reports_cleaned_historical_collection(
+    environment: OperationsEnvironment,
+) -> None:
+    service, configuration = restoration_service(environment)
+    add_generation(
+        environment,
+        1,
+        "RETIRED",
+        physical=False,
+        retired_at=NOW - timedelta(days=2),
+        configuration=configuration,
+    )
+    add_generation(environment, 2, "ACTIVE", configuration=configuration)
+
+    with pytest.raises(
+        RestorationUnavailablePhysicalCleanedError,
+        match="RESTORATION_UNAVAILABLE_PHYSICAL_CLEANED",
+    ):
+        service.plan(1)
+
+
+def test_restore_rejects_noncanonical_historical_collection(
+    environment: OperationsEnvironment,
+) -> None:
+    service, configuration = restoration_service(environment)
+    source_id = add_generation(
+        environment,
+        1,
+        "RETIRED",
+        retired_at=NOW - timedelta(days=2),
+        configuration=configuration,
+    )
+    add_generation(environment, 2, "ACTIVE", configuration=configuration)
+    with environment.sessions() as session, session.begin():
+        source = session.get(IndexState, source_id)
+        assert source is not None
+        source.qdrant_collection = "noncanonical_historical_collection"
+
+    with pytest.raises(RestorationValidationError, match="not canonical"):
+        service.plan(1)
+
+
+@pytest.mark.parametrize(
+    ("mutation", "expected"),
+    [
+        ("membership", "index_state_chunks"),
+        ("bm25", "BM25 state hash"),
+        ("configuration", "configuration fingerprint"),
+        ("payload", "payload schema"),
+    ],
+)
+def test_restore_rejects_corrupt_historical_generation(
+    environment: OperationsEnvironment,
+    mutation: str,
+    expected: str,
+) -> None:
+    service, configuration = restoration_service(environment)
+    source_id = add_generation(
+        environment,
+        1,
+        "RETIRED",
+        retired_at=NOW - timedelta(days=2),
+        configuration=configuration,
+    )
+    add_generation(environment, 2, "ACTIVE", configuration=configuration)
+    with environment.sessions() as session, session.begin():
+        source = session.get(IndexState, source_id)
+        assert source is not None
+        if mutation == "membership":
+            membership = session.get(
+                IndexStateChunk,
+                (source_id, environment.chunk_pk),
+            )
+            assert membership is not None
+            session.delete(membership)
+        elif mutation == "bm25":
+            source.bm25_state_hash = "f" * 64
+        elif mutation == "configuration":
+            source.index_configuration_fingerprint = "f" * 64
+        else:
+            incompatible = replace(
+                configuration,
+                payload_schema_version="managed-qdrant-payload-v1",
+            )
+            identity = managed_index_configuration_identity(incompatible)
+            source.index_configuration = identity.payload
+            source.index_configuration_fingerprint = identity.fingerprint
+
+    with pytest.raises(RestorationValidationError, match=expected):
+        service.plan(1)
+
+
+def test_restore_rejects_runtime_embedding_incompatibility(
+    environment: OperationsEnvironment,
+) -> None:
+    service, compatible = restoration_service(environment)
+    incompatible = replace(compatible, embedding_fingerprint="f" * 64)
+    add_generation(
+        environment,
+        1,
+        "RETIRED",
+        retired_at=NOW - timedelta(days=2),
+        configuration=incompatible,
+    )
+    add_generation(environment, 2, "ACTIVE", configuration=incompatible)
+
+    with pytest.raises(RestorationValidationError, match="embedding fingerprint"):
+        service.plan(1)
+
+
+def test_confirmed_restore_copies_history_into_new_active_generation(
+    environment: OperationsEnvironment,
+) -> None:
+    service, configuration = restoration_service(environment)
+    source_id = add_generation(
+        environment,
+        1,
+        "RETIRED",
+        retired_at=NOW - timedelta(days=2),
+        configuration=configuration,
+    )
+    previous_active_id = add_generation(
+        environment,
+        2,
+        "ACTIVE",
+        configuration=configuration,
+    )
+    source_collection = managed_generation_collection_name(MANAGED_PREFIX, 1)
+    source_points_before = ManagedQdrantStore(
+        environment.client,
+        managed_prefix=MANAGED_PREFIX,
+        configuration=configuration,
+        embedding_dimension=DIMENSION,
+    ).scroll_all_points(source_collection)
+    before_counts = database_counts(environment)
+
+    result = service.execute(
+        service.plan(1),
+        restoration_reason="return to validated historical policy",
+    )
+
+    assert result.new_active_generation == 3
+    assert result.dense_vectors_copied == 1
+    assert environment.client.collection_exists(source_collection)
+    assert environment.client.collection_exists(
+        managed_generation_collection_name(MANAGED_PREFIX, 2)
+    )
+    assert environment.client.collection_exists(result.collection)
+    with environment.sessions() as session:
+        states = LineageRepository(session).list_index_states(environment.corpus_id)
+        assert [(state.generation, state.status) for state in states] == [
+            (1, "RETIRED"),
+            (2, "RETIRED"),
+            (3, "ACTIVE"),
+        ]
+        restored = states[2]
+        assert restored.restored_from_index_state_id == source_id
+        assert restored.restoration_reason == "return to validated historical policy"
+        assert restored.ingestion_run_id == states[0].ingestion_run_id
+        assert restored.bm25_state == states[0].bm25_state
+        assert restored.bm25_state_hash == states[0].bm25_state_hash
+        assert restored.bm25_corpus_hash == states[0].bm25_corpus_hash
+        memberships = repository_memberships = LineageRepository(
+            session
+        ).list_index_state_chunks(restored.index_state_id)
+        assert len(repository_memberships) == 1
+        assert memberships[0].chunk_pk == environment.chunk_pk
+        assert memberships[0].dense_action == "REUSED"
+        assert memberships[0].dense_source_chunk_pk == environment.chunk_pk
+        assert sum(state.status == "ACTIVE" for state in states) == 1
+        assert session.get(IndexState, previous_active_id).status == "RETIRED"  # type: ignore[union-attr]
+    after_counts = database_counts(environment)
+    assert after_counts[:6] == before_counts[:6]
+    assert after_counts[6:] == (before_counts[6] + 1, before_counts[7] + 1)
+    store = ManagedQdrantStore(
+        environment.client,
+        managed_prefix=MANAGED_PREFIX,
+        configuration=configuration,
+        embedding_dimension=DIMENSION,
+    )
+    source_points_after = store.scroll_all_points(source_collection)
+    restored_points = store.scroll_all_points(result.collection)
+    assert source_points_after == source_points_before
+    assert restored_points[0].dense_vector == pytest.approx(
+        source_points_before[0].dense_vector
+    )
+    assert restored_points[0].sparse_vector == source_points_before[0].sparse_vector
+    expected_payload = dict(source_points_before[0].payload)
+    expected_payload["index_generation"] = 3
+    expected_payload["index_state_id"] = str(result.new_active_index_state_id)
+    assert dict(restored_points[0].payload) == expected_payload
+
+
+def test_physical_copy_failure_keeps_active_and_records_failed_candidate(
+    environment: OperationsEnvironment,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service, configuration = restoration_service(environment)
+    add_generation(
+        environment,
+        1,
+        "RETIRED",
+        retired_at=NOW - timedelta(days=2),
+        configuration=configuration,
+    )
+    active_id = add_generation(environment, 2, "ACTIVE", configuration=configuration)
+    plan = service.plan(1)
+
+    def fail_copy(*_args: object, **_kwargs: object) -> int:
+        raise RuntimeError("injected copy failure")
+
+    monkeypatch.setattr(ManagedQdrantStore, "copy_generation_points", fail_copy)
+    with pytest.raises(RestorationBuildError, match="failed before READY"):
+        service.execute(plan, restoration_reason="failure test")
+
+    with environment.sessions() as session:
+        states = LineageRepository(session).list_index_states(environment.corpus_id)
+        assert [(state.generation, state.status) for state in states] == [
+            (1, "RETIRED"),
+            (2, "ACTIVE"),
+            (3, "FAILED"),
+        ]
+        assert session.get(IndexState, active_id).status == "ACTIVE"  # type: ignore[union-attr]
+
+
+def test_cleanup_protects_source_of_in_progress_restoration(
+    environment: OperationsEnvironment,
+) -> None:
+    _, configuration = restoration_service(environment)
+    source_id = add_generation(
+        environment,
+        1,
+        "RETIRED",
+        retired_at=NOW - timedelta(days=10),
+        configuration=configuration,
+    )
+    add_generation(environment, 2, "ACTIVE", configuration=configuration)
+    with environment.sessions() as session, session.begin():
+        repository = LineageRepository(session)
+        repository.create_building_index_state(
+            environment.corpus_id,
+            3,
+            environment.run_id,
+            managed_generation_collection_name(MANAGED_PREFIX, 3),
+            "s" * 64,
+            configuration.embedding_fingerprint,
+            configuration.chunking_fingerprint,
+            restored_from_index_state_id=source_id,
+            restoration_reason="in progress",
+        )
+    settings = environment.settings.model_copy(
+        update={"retained_retired_generations": 0}
+    )
+    service = ManagedIndexOperationsService(
+        session_factory=environment.sessions,
+        qdrant_client=environment.client,
+        corpus_key=CORPUS_KEY,
+        settings=settings,
+        clock=lambda: NOW,
+    )
+
+    source = next(
+        item for item in service.cleanup_plan().candidates if item.generation == 1
+    )
+
+    assert source.classification is CleanupClassification.RESTORATION_SOURCE_PROTECTED
+
+
+def test_stale_active_prevents_final_restoration_activation(
+    environment: OperationsEnvironment,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service, configuration = restoration_service(environment)
+    add_generation(
+        environment,
+        1,
+        "RETIRED",
+        retired_at=NOW - timedelta(days=2),
+        configuration=configuration,
+    )
+    old_active_id = add_generation(environment, 2, "ACTIVE", configuration=configuration)
+    plan = service.plan(1)
+    original_activate = service._activate
+
+    def publish_concurrently(candidate_id: UUID, stale_plan: Any) -> None:
+        with environment.sessions() as session, session.begin():
+            repository = LineageRepository(session)
+            repository.transition_index_state(
+                old_active_id,
+                "ACTIVE",
+                "RETIRED",
+                occurred_at=NOW,
+            )
+            concurrent = repository.create_building_index_state(
+                environment.corpus_id,
+                4,
+                environment.run_id,
+                managed_generation_collection_name(MANAGED_PREFIX, 4),
+                "s" * 64,
+                configuration.embedding_fingerprint,
+                configuration.chunking_fingerprint,
+            )
+            concurrent.bm25_state = {"placeholder": True}
+            concurrent.status = "ACTIVE"
+            concurrent.embedding_dimension = DIMENSION
+            concurrent.activated_at = NOW
+        original_activate(candidate_id, stale_plan)
+
+    monkeypatch.setattr(service, "_activate", publish_concurrently)
+    with pytest.raises(
+        RestorationActivationConflictError,
+        match=r"atomically activated|different ACTIVE",
+    ):
+        service.execute(plan, restoration_reason="stale active test")
+
+    with environment.sessions() as session:
+        states = LineageRepository(session).list_index_states(environment.corpus_id)
+        assert [(state.generation, state.status) for state in states] == [
+            (1, "RETIRED"),
+            (2, "RETIRED"),
+            (3, "FAILED"),
+            (4, "ACTIVE"),
+        ]

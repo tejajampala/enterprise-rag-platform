@@ -389,6 +389,10 @@ class IndexState(Base):
     ingestion_run_id: Mapped[UUID] = mapped_column(
         Uuid, ForeignKey("ingestion_runs.run_id"), nullable=False
     )
+    restored_from_index_state_id: Mapped[UUID | None] = mapped_column(
+        Uuid, ForeignKey("index_states.index_state_id")
+    )
+    restoration_reason: Mapped[str | None] = mapped_column(Text)
     status: Mapped[str] = mapped_column(String(32), nullable=False)
     qdrant_collection: Mapped[str] = mapped_column(String(255), nullable=False, unique=True)
     snapshot_hash: Mapped[str] = mapped_column(CHAR(64), nullable=False)
@@ -412,6 +416,10 @@ class IndexState(Base):
 
     corpus: Mapped[Corpus] = relationship(back_populates="index_states")
     ingestion_run: Mapped[IngestionRun] = relationship(back_populates="index_states")
+    restored_from: Mapped[IndexState | None] = relationship(
+        remote_side=[index_state_id],
+        foreign_keys=[restored_from_index_state_id],
+    )
     chunks: Mapped[list[IndexStateChunk]] = relationship(back_populates="index_state")
 
     @validates("status")

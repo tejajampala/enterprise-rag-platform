@@ -12,7 +12,10 @@ from qdrant_client import QdrantClient
 
 from consumer_finance_rag.config import AppSettings, EmbeddingModelSettings
 from consumer_finance_rag.lineage.fingerprints import (
+    BM25_IMPLEMENTATION_VERSION,
+    BM25_TOKENIZER_VERSION,
     PAYLOAD_SCHEMA_VERSION,
+    POINT_ID_FORMAT_VERSION,
     ManagedIndexConfiguration,
     embedding_fingerprint,
     managed_index_configuration_identity,
@@ -238,6 +241,18 @@ def validate_active_managed_index_metadata(
     if configuration.payload_schema_version != PAYLOAD_SCHEMA_VERSION:
         raise CorruptActiveManagedIndexError(
             "ACTIVE managed index uses an unsupported payload schema; publish a new generation"
+        )
+    if configuration.point_id_format_version != POINT_ID_FORMAT_VERSION:
+        raise CorruptActiveManagedIndexError(
+            "ACTIVE managed index uses an unsupported point-ID format"
+        )
+    if configuration.bm25_implementation_version != BM25_IMPLEMENTATION_VERSION:
+        raise CorruptActiveManagedIndexError(
+            "ACTIVE managed index uses an unsupported BM25 implementation"
+        )
+    if configuration.bm25_tokenizer_version != BM25_TOKENIZER_VERSION:
+        raise CorruptActiveManagedIndexError(
+            "ACTIVE managed index uses an unsupported BM25 tokenizer"
         )
     canonical_identity = managed_index_configuration_identity(configuration)
     if canonical_identity.payload != raw_configuration:

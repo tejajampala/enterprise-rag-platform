@@ -183,6 +183,132 @@ class ManagedQdrantStore:
                 wait=True,
             )
 
+    def copy_generation_points(
+        self,
+        source_collection: str,
+        target_collection: str,
+        *,
+        target_index_state_id: UUID,
+        batch_size: int = 128,
+    ) -> int:
+        """Copy complete historical points while updating only generation identity."""
+
+        source_generation = self._require_existing_collection(source_collection)
+        target_generation = self._require_existing_collection(target_collection)
+        if source_collection == target_collection or source_generation == target_generation:
+            raise ManagedVectorValidationError(
+                "Restoration source and target must be different immutable generations"
+            )
+        if batch_size <= 0:
+            raise ManagedVectorValidationError("batch_size must be positive")
+        copied: list[models.PointStruct] = []
+        for point in self.scroll_all_points(source_collection):
+            if point.dense_vector is None:
+                raise ManagedVectorValidationError(
+                    f"Historical point {point.point_id} is missing its dense vector"
+                )
+            if point.sparse_vector is None:
+                raise ManagedVectorValidationError(
+                    f"Historical point {point.point_id} is missing its sparse vector"
+                )
+            _validate_dense_vector(point.dense_vector, self._embedding_dimension)
+            _validate_sparse_vector(
+                point.sparse_vector.indices,
+                point.sparse_vector.values,
+            )
+            payload = deepcopy(dict(point.payload))
+            payload["index_generation"] = target_generation
+            payload["index_state_id"] = str(target_index_state_id)
+            copied.append(
+                models.PointStruct(
+                    id=point.point_id,
+                    vector={
+                        self._configuration.dense_vector_name: list(
+                            point.dense_vector
+                        ),
+                        self._configuration.sparse_vector_name: models.SparseVector(
+                            indices=list(point.sparse_vector.indices),
+                            values=list(point.sparse_vector.values),
+                        ),
+                    },
+                    payload=payload,
+                )
+            )
+        for start in range(0, len(copied), batch_size):
+            self._client.upsert(
+                collection_name=target_collection,
+                points=copied[start : start + batch_size],
+                wait=True,
+            )
+        return len(copied)
+
+    def validate_restored_generation_collection(
+        self,
+        source_collection: str,
+        target_collection: str,
+        *,
+        target_index_state_id: UUID,
+    ) -> ManagedCollectionValidationResult:
+        """Prove target points equal source points except for new generation identity."""
+
+        self._require_existing_collection(source_collection)
+        target_generation = self._require_existing_collection(target_collection)
+        issues = self._collection_configuration_issues(
+            self.inspect_collection(target_collection)
+        )
+        source = {
+            point.point_id: point
+            for point in self.scroll_all_points(source_collection)
+        }
+        target = {
+            point.point_id: point
+            for point in self.scroll_all_points(target_collection)
+        }
+        if set(source) != set(target):
+            missing = sorted(set(source) - set(target), key=str)
+            unexpected = sorted(set(target) - set(source), key=str)
+            if missing:
+                issues.append("missing copied point IDs: " + ", ".join(map(str, missing)))
+            if unexpected:
+                issues.append(
+                    "unexpected copied point IDs: " + ", ".join(map(str, unexpected))
+                )
+        for point_id in sorted(set(source) & set(target), key=str):
+            original = source[point_id]
+            restored = target[point_id]
+            expected_payload = deepcopy(dict(original.payload))
+            expected_payload["index_generation"] = target_generation
+            expected_payload["index_state_id"] = str(target_index_state_id)
+            if dict(restored.payload) != expected_payload:
+                issues.append(f"point {point_id} restored payload mismatch")
+            if original.dense_vector is None or restored.dense_vector is None:
+                issues.append(f"point {point_id} dense vector is missing")
+            elif not _float_sequences_close(
+                original.dense_vector,
+                restored.dense_vector,
+            ):
+                issues.append(f"point {point_id} restored dense vector mismatch")
+            if original.sparse_vector is None or restored.sparse_vector is None:
+                issues.append(f"point {point_id} sparse vector is missing")
+            elif (
+                original.sparse_vector.indices != restored.sparse_vector.indices
+                or not _float_sequences_close(
+                    original.sparse_vector.values,
+                    restored.sparse_vector.values,
+                )
+            ):
+                issues.append(f"point {point_id} restored sparse vector mismatch")
+        if issues:
+            raise ManagedCollectionValidationError(
+                f"Restored Qdrant collection {target_collection} failed validation:\n- "
+                + "\n- ".join(issues)
+            )
+        return ManagedCollectionValidationResult(
+            collection_name=target_collection,
+            point_count=len(target),
+            point_ids=tuple(sorted(target, key=str)),
+        )
+
     def retrieve_dense_vectors(
         self,
         collection_name: str,

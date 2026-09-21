@@ -27,6 +27,12 @@ from consumer_finance_rag.lineage.index_operations import (
     ManagedIndexOperationsError,
     ManagedIndexOperationsService,
 )
+from consumer_finance_rag.lineage.restoration import (
+    GenerationRestorationPlan,
+    GenerationRestorationResult,
+    ManagedGenerationRestorationError,
+    ManagedGenerationRestorationService,
+)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -54,6 +60,12 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Plan cleanup; deletion still requires --confirm.",
     )
+    actions.add_argument(
+        "--restore-generation",
+        type=int,
+        metavar="GENERATION",
+        help="Plan restoration of one RETIRED generation into a new generation.",
+    )
     parser.add_argument(
         "--deep",
         action="store_true",
@@ -62,7 +74,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--confirm",
         action="store_true",
-        help="With --cleanup, explicitly permit eligible Qdrant deletions.",
+        help="With --cleanup or --restore-generation, permit the planned change.",
     )
     return parser
 
@@ -95,6 +107,11 @@ def format_status(statuses: Sequence[ManagedGenerationStatus]) -> str:
         )
         if status.error_message:
             lines.append(f"  error: {_safe_error(status.error_message)}")
+        if status.restored_from_index_state_id is not None:
+            lines.append(f"  restored from: {status.restored_from_index_state_id}")
+            lines.append(
+                f"  restoration reason: {_safe_error(status.restoration_reason or '')}"
+            )
         lines.append("")
     active = sum(status.status == "ACTIVE" for status in statuses)
     eligible = sum(
@@ -176,13 +193,68 @@ def format_cleanup_result(result: GenerationCleanupExecutionResult) -> str:
     return "\n".join(lines)
 
 
+def format_restoration_plan(plan: GenerationRestorationPlan) -> str:
+    lines = [
+        "Restore plan",
+        "",
+        "Source generation:",
+        f"g{plan.source_generation:06d} RETIRED",
+        plan.source_collection,
+        "",
+        "Current ACTIVE:",
+        f"g{plan.current_active_generation:06d}",
+        "",
+        "Proposed generation:",
+        f"g{plan.proposed_generation:06d}",
+        "",
+        "Target collection:",
+        plan.proposed_target_collection,
+        "",
+        f"Documents: {plan.document_count}",
+        f"Chunks: {plan.chunk_count}",
+        "Embedding: compatible",
+        "BM25: valid / copied",
+        f"ACL/PII schema: compatible ({plan.payload_schema_version})",
+    ]
+    lines.extend(f"Warning: {warning}" for warning in plan.warnings)
+    lines.extend(["", "Action: NO CHANGES YET — rerun with --confirm"])
+    return "\n".join(lines)
+
+
+def format_restoration_result(result: GenerationRestorationResult) -> str:
+    return "\n".join(
+        [
+            "Restore completed",
+            "",
+            "Source:",
+            f"g{result.source_generation:06d} (remains RETIRED)",
+            "",
+            "Previous ACTIVE:",
+            f"g{result.previous_active_generation:06d} -> RETIRED",
+            "",
+            "New ACTIVE:",
+            f"g{result.new_active_generation:06d}",
+            "",
+            "Collection:",
+            result.collection,
+            "",
+            f"Dense vectors: copied/reused {result.dense_vectors_copied}",
+            "BM25: copied",
+            "Source lineage: unchanged",
+        ]
+    )
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     if args.deep and not args.validate:
         print("--deep requires --validate", file=sys.stderr)
         return 2
-    if args.confirm and not args.cleanup:
-        print("--confirm is only valid with --cleanup", file=sys.stderr)
+    if args.confirm and not (args.cleanup or args.restore_generation is not None):
+        print(
+            "--confirm is only valid with --cleanup or --restore-generation",
+            file=sys.stderr,
+        )
         return 2
 
     settings = load_settings(args.config)
@@ -210,11 +282,38 @@ def main(argv: Sequence[str] | None = None) -> int:
             print(format_cleanup_plan(service.cleanup_plan()))
             return 0
         if args.cleanup:
-            plan = service.cleanup_plan()
-            print(format_cleanup_plan(plan))
-            result = service.execute_cleanup(plan, confirmed=bool(args.confirm))
-            print("", format_cleanup_result(result), sep="\n")
-            return 0 if all(item.deleted for item in result.items) or not args.confirm else 3
+            cleanup_plan = service.cleanup_plan()
+            print(format_cleanup_plan(cleanup_plan))
+            cleanup_result = service.execute_cleanup(
+                cleanup_plan,
+                confirmed=bool(args.confirm),
+            )
+            print("", format_cleanup_result(cleanup_result), sep="\n")
+            return (
+                0
+                if all(item.deleted for item in cleanup_result.items) or not args.confirm
+                else 3
+            )
+        if args.restore_generation is not None:
+            restoration = ManagedGenerationRestorationService(
+                session_factory=sessions,
+                qdrant_client=client,
+                corpus_key=settings.managed_ingestion.corpus_key,
+                managed_index_settings=settings.managed_index,
+                embedding_settings=settings.models.embedding,
+            )
+            restoration_plan = restoration.plan(args.restore_generation)
+            print(format_restoration_plan(restoration_plan))
+            if not args.confirm:
+                return 0
+            restoration_result = restoration.execute(
+                restoration_plan,
+                restoration_reason=(
+                    f"Operator-confirmed restoration of g{args.restore_generation:06d}"
+                ),
+            )
+            print("", format_restoration_result(restoration_result), sep="\n")
+            return 0
         print(format_status(service.status()))
         return 0
     except (OperationalError, ProgrammingError):
@@ -224,7 +323,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             file=sys.stderr,
         )
         return 2
-    except ManagedIndexOperationsError as exc:
+    except (ManagedIndexOperationsError, ManagedGenerationRestorationError) as exc:
         print(f"Managed generation operation failed: {exc}", file=sys.stderr)
         return 3
     finally:

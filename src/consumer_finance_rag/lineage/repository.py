@@ -785,6 +785,8 @@ class LineageRepository:
         chunking_fingerprint: str,
         document_count: int = 0,
         chunk_count: int = 0,
+        restored_from_index_state_id: UUID | None = None,
+        restoration_reason: str | None = None,
     ) -> IndexState:
         """Create an incomplete BUILDING generation without committing."""
 
@@ -797,6 +799,21 @@ class LineageRepository:
             raise InvalidLineageStateError("Index document and chunk counts cannot be negative")
         if not qdrant_collection.strip():
             raise InvalidLineageStateError("Qdrant collection cannot be empty")
+        if restored_from_index_state_id is not None:
+            source = self._require_index_state(restored_from_index_state_id)
+            self._require_same_corpus(corpus_id, source.corpus_id, "restoration source")
+            if source.status != "RETIRED":
+                raise InvalidLineageStateError(
+                    "Restoration source index state must be RETIRED"
+                )
+            if not restoration_reason or not restoration_reason.strip():
+                raise InvalidLineageStateError(
+                    "Restored index state requires a non-empty restoration reason"
+                )
+        elif restoration_reason is not None:
+            raise InvalidLineageStateError(
+                "Restoration reason requires restored_from_index_state_id"
+            )
         existing_generation = self._session.scalar(
             select(IndexState.index_state_id).where(
                 IndexState.corpus_id == corpus_id,
@@ -828,6 +845,8 @@ class LineageRepository:
             chunking_fingerprint=chunking_fingerprint,
             document_count=document_count,
             chunk_count=chunk_count,
+            restored_from_index_state_id=restored_from_index_state_id,
+            restoration_reason=restoration_reason,
         )
         self._session.add(state)
         self._session.flush()

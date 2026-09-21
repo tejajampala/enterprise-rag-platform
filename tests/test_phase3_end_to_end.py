@@ -51,6 +51,9 @@ from consumer_finance_rag.lineage.models import (
     LineageDocument,
 )
 from consumer_finance_rag.lineage.repository import LineageRepository
+from consumer_finance_rag.lineage.restoration import (
+    ManagedGenerationRestorationService,
+)
 from consumer_finance_rag.lineage.service import (
     LineageApplyResult,
     LineageApplyService,
@@ -452,10 +455,94 @@ def test_two_generation_managed_lifecycle_is_incremental_and_pinned(
     with sessions() as session:
         assert_exactly_one_active(session)
 
+    # Scenario 9: restore historical A as a new generation without rolling back source B.
+    lineage_before_restore = lineage_counts(sessions)
+    embedding_before_restore = publication_embedding.embedded_document_count
+    bm25_fits_before_restore = len(bm25_fits)
+    restoration = ManagedGenerationRestorationService(
+        session_factory=sessions,
+        qdrant_client=qdrant,
+        corpus_key=CORPUS_KEY,
+        managed_index_settings=settings.managed_index,
+        embedding_settings=settings.models.embedding,
+    )
+    restore_plan = restoration.plan(1)
+    assert restore_plan.source_generation == 1
+    assert restore_plan.current_active_generation == 2
+    assert restore_plan.proposed_generation == 3
+    restore_result = restoration.execute(
+        restore_plan,
+        restoration_reason="end-to-end historical content restore",
+    )
+    assert restore_result.new_active_generation == 3
+    assert publication_embedding.embedded_document_count == embedding_before_restore
+    assert len(bm25_fits) == bm25_fits_before_restore
+    assert_generation_invariants(sessions, qdrant, generation_1, "RETIRED")
+    assert_generation_invariants(sessions, qdrant, generation_2, "RETIRED")
+    with sessions() as session:
+        states = LineageRepository(session).list_index_states(first.manifest.corpus_id)
+        restored = states[-1]
+        assert [(state.generation, state.status) for state in states] == [
+            (1, "RETIRED"),
+            (2, "RETIRED"),
+            (3, "ACTIVE"),
+        ]
+        assert restored.restored_from_index_state_id == generation_1.index_state_id
+        source = session.get(IndexState, generation_1.index_state_id)
+        assert source is not None
+        assert restored.bm25_state == source.bm25_state
+        assert restored.bm25_state_hash == source.bm25_state_hash
+        payments = session.scalar(
+            select(LineageDocument).where(LineageDocument.source_id == "payments")
+        )
+        assert payments is not None
+        latest_version = session.scalar(
+            select(DocumentVersion)
+            .where(DocumentVersion.document_pk == payments.document_pk)
+            .order_by(DocumentVersion.version_number.desc())
+            .limit(1)
+        )
+        assert latest_version is not None
+        assert latest_version.version_number == 2
+        assert "omega chargeback replacement" in latest_version.normalized_text.lower()
+        assert_exactly_one_active(session)
+    lineage_after_restore = lineage_counts(sessions)
+    assert lineage_after_restore[:6] == lineage_before_restore[:6]
+    assert lineage_after_restore[6:] == (
+        lineage_before_restore[6] + 1,
+        lineage_before_restore[7] + first.manifest.chunk_count,
+    )
+
+    runtime_g3, _, _ = build_runtime(sessions, settings, qdrant)
+    assert runtime_g3.generation == 3
+    restored_result = runtime_g3.retrieval_service.retrieve_debug(
+        "legacy alpha dispute",
+        top_k=3,
+    )
+    assert any(
+        "Legacy alpha dispute" in item.chunk.text
+        for item in restored_result.reranked
+    )
+    assert all(
+        "omega chargeback replacement" not in item.chunk.text.lower()
+        for item in restored_result.reranked
+    )
+    assert runtime_g2.generation == 2
+    assert runtime_g2.qdrant_collection == generation_2.collection
+    pinned_g2_result = runtime_g2.retrieval_service.retrieve_debug(
+        "omega chargeback replacement",
+        top_k=3,
+    )
+    assert any(
+        "omega chargeback replacement" in item.chunk.text.lower()
+        for item in pinned_g2_result.reranked
+    )
+
     collection_names = {item.name for item in qdrant.get_collections().collections}
     assert collection_names == {
         f"{MANAGED_PREFIX}_g000001",
         f"{MANAGED_PREFIX}_g000002",
+        f"{MANAGED_PREFIX}_g000003",
     }
     assert "consumer_finance_phase1" not in collection_names
     assert "consumer_finance_evaluation" not in collection_names
