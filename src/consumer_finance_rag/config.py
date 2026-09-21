@@ -72,7 +72,7 @@ class ManagedIngestionSettings(BaseModel):
 
 
 class ManagedIndexSettings(BaseModel):
-    """Immutable build settings for Phase 3 managed index generations."""
+    """Build identity and conservative operations settings for managed generations."""
 
     format_version: str = "managed-hybrid-index-v1"
     dense_vector_name: str = "dense_hnsw"
@@ -84,6 +84,8 @@ class ManagedIndexSettings(BaseModel):
     bm25_b: float = Field(default=0.75, ge=0, le=1)
     sparse_modifier: Literal["none"] = "none"
     sparse_on_disk: bool = False
+    retained_retired_generations: int = Field(default=2, ge=0)
+    retired_cleanup_min_age_hours: float = Field(default=24.0, ge=0)
 
 
 class QdrantSettings(BaseModel):

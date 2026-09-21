@@ -112,14 +112,20 @@ def test_managed_index_settings_are_typed_and_environment_configurable(
     assert defaults.managed_index.bm25_b == 0.75
     assert defaults.managed_index.sparse_modifier == "none"
     assert defaults.managed_index.sparse_on_disk is False
+    assert defaults.managed_index.retained_retired_generations == 2
+    assert defaults.managed_index.retired_cleanup_min_age_hours == 24
 
     monkeypatch.setenv("RAG__MANAGED_INDEX__HNSW_M", "32")
     monkeypatch.setenv("RAG__MANAGED_INDEX__BM25_K1", "1.5")
+    monkeypatch.setenv("RAG__MANAGED_INDEX__RETAINED_RETIRED_GENERATIONS", "3")
+    monkeypatch.setenv("RAG__MANAGED_INDEX__RETIRED_CLEANUP_MIN_AGE_HOURS", "48")
 
     overridden = load_settings(path)
 
     assert overridden.managed_index.hnsw_m == 32
     assert overridden.managed_index.bm25_k1 == 1.5
+    assert overridden.managed_index.retained_retired_generations == 3
+    assert overridden.managed_index.retired_cleanup_min_age_hours == 48
 
 
 def test_query_hnsw_ef_is_optional_and_environment_configurable(

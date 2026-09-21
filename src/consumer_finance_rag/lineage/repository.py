@@ -953,6 +953,48 @@ class LineageRepository:
             )
         )
 
+    def count_index_state_chunks(self, index_state_id: UUID) -> int:
+        """Count immutable membership rows for one managed generation."""
+
+        self._require_index_state(index_state_id)
+        return int(
+            self._session.scalar(
+                select(func.count())
+                .select_from(IndexStateChunk)
+                .where(IndexStateChunk.index_state_id == index_state_id)
+            )
+            or 0
+        )
+
+    def list_index_state_chunk_texts(self, index_state_id: UUID) -> list[str]:
+        """Return generation chunk texts in the original managed-manifest order."""
+
+        self._require_index_state(index_state_id)
+        return list(
+            self._session.scalars(
+                select(LineageChunk.text)
+                .join(
+                    IndexStateChunk,
+                    IndexStateChunk.chunk_pk == LineageChunk.chunk_pk,
+                )
+                .join(
+                    DocumentVersion,
+                    DocumentVersion.document_version_id
+                    == LineageChunk.document_version_id,
+                )
+                .join(
+                    LineageDocument,
+                    LineageDocument.document_pk == DocumentVersion.document_pk,
+                )
+                .where(IndexStateChunk.index_state_id == index_state_id)
+                .order_by(
+                    LineageDocument.source_key,
+                    LineageChunk.ordinal,
+                    LineageChunk.compatibility_chunk_id,
+                )
+            )
+        )
+
     def record_index_state_chunk(
         self,
         index_state_id: UUID,

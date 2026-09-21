@@ -109,7 +109,7 @@ def build_managed_retrieval_runtime(
             f"Resolved managed index {active.index_state_id} is {active.status}, not ACTIVE"
         )
 
-    configuration, sparse_encoder = _validate_active_metadata(active)
+    configuration, sparse_encoder = validate_active_managed_index_metadata(active)
     try:
         expected_collection = managed_generation_collection_name(
             corpus.qdrant_collection_prefix,
@@ -143,7 +143,7 @@ def build_managed_retrieval_runtime(
         settings.models.reranker.trust_remote_code,
     )
     client = qdrant_client or QdrantClient(url=settings.qdrant.url)
-    _validate_physical_collection(
+    validate_active_managed_physical_collection(
         client,
         managed_prefix=corpus.qdrant_collection_prefix,
         active=active,
@@ -191,7 +191,7 @@ def build_managed_retrieval_runtime(
     )
 
 
-def _validate_active_metadata(
+def validate_active_managed_index_metadata(
     active: IndexState,
 ) -> tuple[ManagedIndexConfiguration, BM25SparseEncoder]:
     required_strings = {
@@ -234,7 +234,7 @@ def _validate_active_metadata(
         raise CorruptActiveManagedIndexError(
             "ACTIVE index configuration fingerprint does not match its payload"
         )
-    configuration = _parse_configuration(raw_configuration)
+    configuration = parse_managed_index_configuration(raw_configuration)
     if configuration.payload_schema_version != PAYLOAD_SCHEMA_VERSION:
         raise CorruptActiveManagedIndexError(
             "ACTIVE managed index uses an unsupported payload schema; publish a new generation"
@@ -282,7 +282,9 @@ def _validate_active_metadata(
     return configuration, BM25SparseEncoder(state)
 
 
-def _parse_configuration(payload: Mapping[str, Any]) -> ManagedIndexConfiguration:
+def parse_managed_index_configuration(
+    payload: Mapping[str, Any],
+) -> ManagedIndexConfiguration:
     try:
         bm25 = _mapping(payload, "bm25")
         dense = _mapping(payload, "dense")
@@ -353,7 +355,7 @@ def _validate_embedding_compatibility(
             )
 
 
-def _validate_physical_collection(
+def validate_active_managed_physical_collection(
     client: QdrantClient,
     *,
     managed_prefix: str,

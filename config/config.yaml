@@ -47,6 +47,8 @@ managed_index:
   bm25_b: 0.75
   sparse_modifier: none
   sparse_on_disk: false
+  retained_retired_generations: 2
+  retired_cleanup_min_age_hours: 24
 
 qdrant:
   url: http://localhost:6333

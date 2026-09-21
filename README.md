@@ -194,8 +194,45 @@ identity/count information without contacting Qdrant or loading the embedding mo
 
 Publication creates a new immutable managed Qdrant generation only when lineage or index
 configuration requires it. Repeating publication with unchanged lineage/configuration returns
-`NO_INDEX_CHANGE`. Older physical generations are retained; cleanup, rollback, repair, and
-retention workflows are not implemented.
+`NO_INDEX_CHANGE`.
+
+### Operate managed generations
+
+PostgreSQL remains the control-plane authority and retains every generation, membership, source,
+version, chunk, ACL, and PII history row. Operators can inspect and validate that history against
+the physical Qdrant data plane without loading application models:
+
+```bash
+uv run python scripts/manage_index_generations.py --status
+uv run python scripts/manage_index_generations.py --validate
+uv run python scripts/manage_index_generations.py --validate --deep
+uv run python scripts/manage_index_generations.py --cleanup-plan
+```
+
+Normal validation is bounded to persisted metadata, hashes, collection configuration, exact point
+counts, and membership counts. `--deep` is intentionally explicit because it scrolls every point
+to verify generation/lineage identities, point IDs, payload schema, ACL fields, PII fields,
+chunking identity, and vector presence.
+
+Cleanup planning is read-only. Physical deletion requires both flags:
+
+```bash
+uv run python scripts/manage_index_generations.py --cleanup --confirm
+```
+
+Without `--confirm`, `--cleanup` only prints the plan. ACTIVE, READY, and BUILDING generations are
+never eligible. The newest `managed_index.retained_retired_generations` RETIRED generations are
+protected, and older RETIRED generations must exceed
+`managed_index.retired_cleanup_min_age_hours`. Defaults are two retained generations and 24 hours.
+FAILED physical collections may be cleaned conservatively after a locked authoritative status
+re-check; missing FAILED collections are normal. Canonically named orphan collections are reported
+but not deleted. Phase 1 and evaluation collections are never considered managed cleanup targets.
+
+The minimum age is a grace period for generation-pinned older processes, not proof that no process
+still uses the collection and not a distributed runtime lease. Each deletion re-locks/re-reads the
+corpus and recomputes eligibility to avoid deleting from a stale plan. Cleanup removes only an
+eligible Qdrant collection; PostgreSQL history remains immutable. Rollback/reactivation, runtime
+leases, repair, and monitoring are not implemented yet.
 
 ### Select the runtime retrieval profile
 
@@ -444,11 +481,12 @@ not claim production monitoring, quality gains, or release thresholds.
 
 Phase 3 currently provides the application PostgreSQL schema, deterministic planning,
 transactional lineage/version persistence, an explicit immutable managed-index publisher, and an
-explicit generation-pinned managed runtime profile with public/group Qdrant pre-filtering.
+explicit generation-pinned managed runtime profile with public/group Qdrant pre-filtering, plus
+operator status, bounded/deep validation, retention planning, and confirmed physical cleanup.
 Authentication, restoration, automatic runtime reload, concurrent apply locking,
-cleanup/retention, semantic/LLM-based PII classification, production deployment, and formal
-release thresholds remain future work. Kafka, Airflow, Kubernetes, Supabase, OpenSearch, and
-additional orchestration frameworks remain out of scope.
+rollback/reactivation, runtime leases, semantic/LLM-based PII classification, production
+deployment, and formal release thresholds remain future work. Kafka, Airflow, Kubernetes,
+Supabase, OpenSearch, and additional orchestration frameworks remain out of scope.
 
 See [architecture details](docs/architecture.md) and the
 [Phase 2 interview notes](docs/phase2-interview-notes.md). The first expanded-corpus run and its

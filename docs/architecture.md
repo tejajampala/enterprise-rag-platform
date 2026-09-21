@@ -302,9 +302,8 @@ in one commit.
 
 Pre-READY failures mark the committed candidate FAILED in a separate transaction while preserving
 the original error. Deterministic activation conflicts mark a READY candidate FAILED; unexpected
-activation infrastructure/database errors leave it READY for a future retry. Failed, BUILDING,
-READY, and RETIRED physical collections are retained for diagnosis—automatic cleanup and
-retention are not implemented yet. A no-index-change health check verifies persisted BM25 and
+activation infrastructure/database errors leave it READY for a future retry. A no-index-change
+health check verifies persisted BM25 and
 configuration identity plus collection shape and exact point count. Detecting externally replaced
 same-count points is intentionally deferred to a later repair/audit command.
 
@@ -340,8 +339,48 @@ BUILDING, READY, and activation transactions.
 The CLI constructs the existing lazy `HuggingFaceEmbeddingProvider` from model settings and a
 dimension-aware `ManagedQdrantStore` factory from the configured Qdrant URL. It contains no BM25,
 dense-reuse, point-preparation, upsert, or activation algorithm. Repeating the command against
-unchanged lineage/configuration returns `NO_INDEX_CHANGE`; older immutable generations are
-retained.
+unchanged lineage/configuration returns `NO_INDEX_CHANGE`; older PostgreSQL generation history is
+retained even when a separately confirmed operation later removes eligible physical storage.
+
+Managed generation operations remain separate from publication:
+
+```text
+PostgreSQL immutable generation history
+                    |
+                    v
+       ManagedIndexOperationsService
+          |        |        |       |
+        status  validate   deep   cleanup plan
+                                    |
+                        explicit --cleanup --confirm
+                                    |
+                  locked authoritative re-check
+                                    |
+                   guarded physical Qdrant delete
+```
+
+`scripts/manage_index_generations.py` is read-only by default. Status shows every persisted
+generation and whether its physical collection exists. Bounded validation checks the single ACTIVE
+generation, canonical naming, persisted BM25/configuration hashes, membership and point counts,
+vector names, dense dimension, distance, payload compatibility, and collection readability. Deep
+validation additionally scrolls points to check point/lineage identity, membership, chunking, ACL,
+PII, payload schema, and vector presence. RETIRED collections missing after cleanup and FAILED rows
+without collections remain valid historical states; missing ACTIVE storage is an operational error.
+
+The pure cleanup planner protects ACTIVE, READY, and BUILDING states, the newest configured number
+of RETIRED generations, and RETIRED generations inside the configured minimum-age grace period.
+Older canonical RETIRED collections and present canonical FAILED collections can be eligible.
+Managed-looking orphan collections are report-only, and Phase 1/evaluation collections cannot
+match the guarded managed name. Before each confirmed delete, the service locks the corpus row,
+re-reads PostgreSQL state, re-lists Qdrant, and recomputes retention/age eligibility. This shares
+the publication locking convention and prevents stale-plan deletion after a concurrent state
+change.
+
+Cleanup never deletes or updates PostgreSQL lineage/index rows. A cleaned RETIRED generation and
+all `index_state_chunks`, document lineage, ACL history, and PII history remain queryable. The
+minimum age protects common generation-pinned process overlap only as a grace period; it is not a
+distributed lease. Runtime leases, rollback/reactivation, repair, and telemetry are deliberately
+deferred. No schema migration is required for this operations layer.
 
 Managed retrieval resolution is a separate, explicit factory boundary:
 
