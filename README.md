@@ -226,6 +226,24 @@ If another generation becomes ACTIVE while the process is running, the current p
 pinned to its original collection/BM25 pair; restart the application to resolve the new ACTIVE
 generation. Automatic polling and hot reload are not implemented.
 
+### Validate the complete Phase 3 lifecycle offline
+
+`tests/test_phase3_end_to_end.py` is the deterministic managed-lifecycle regression test. It uses
+SQLite, `QdrantClient(":memory:")`, small deterministic model doubles, and the real planner,
+lineage apply service, paragraph chunker, BM25 encoder, managed publisher, Qdrant adapter, managed
+runtime resolver, and hybrid retriever. No PostgreSQL server, Qdrant server, model download,
+network access, AWS, MLflow judge, or RAGAS call is required.
+
+```bash
+uv run pytest tests/test_phase3_end_to_end.py -q
+```
+
+The test publishes `g000001`, queries it, changes exactly one source through the transactional
+lineage path, publishes `g000002`, and proves dense reuse plus fresh computation, independent BM25
+refits, `g000001` retirement, `g000002` activation, process-lifetime runtime pinning, and a final
+`NO_INDEX_CHANGE`. Both immutable physical collections remain present. This validates explicit
+runtime reconstruction after publication; it does not implement or claim hot reload.
+
 ### Debug retrieval
 
 The developer CLI calls the production retrieval service but never Bedrock:

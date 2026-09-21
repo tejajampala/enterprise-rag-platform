@@ -374,6 +374,33 @@ its matching BM25 encoder even if `g000004` is activated later. A process restar
 explicit reload must rebuild the complete runtime; collection names are never hot-swapped alone.
 The Phase 1/2 retrieval implementations remain unchanged.
 
+The offline end-to-end regression in `tests/test_phase3_end_to_end.py` proves this complete
+two-generation sequence using the production orchestration boundaries:
+
+```text
+Source snapshot 1
+        |
+        v
+lineage apply -> publish g1 -> g1 ACTIVE -> runtime_g1 query
+        |
+        v
+Source snapshot 2 (one changed source)
+        |
+        v
+lineage apply -> g2 BUILDING -> g2 READY -> g2 ACTIVE
+                                      |
+                                      +-> g1 RETIRED
+                                      +-> new runtime_g2 resolves g2
+                                      +-> existing runtime_g1 remains pinned to g1
+```
+
+The regression uses SQLite and in-memory Qdrant with deterministic embedding/reranking doubles,
+but retains the real paragraph chunker, change planner, lineage services, BM25 implementation,
+managed publisher/store, resolver, and `HybridRetrievalService`. It also verifies per-generation
+lineage membership equals the physical point count, dense reuse provenance references exact prior
+text/hash, BM25 state is independently valid for each ordered corpus, and unchanged republishing
+returns `NO_INDEX_CHANGE`. It does not poll for or hot-reload a newly ACTIVE generation.
+
 Application integration uses a separate explicit profile dispatcher rather than changing the
 legacy/evaluation factory entry points:
 
