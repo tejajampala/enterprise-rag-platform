@@ -238,6 +238,21 @@ counts, and membership counts. `--deep` is intentionally explicit because it scr
 to verify generation/lineage identities, point IDs, payload schema, ACL fields, PII fields,
 chunking identity, and vector presence.
 
+For a separate read-only visual view, launch the operator dashboard locally:
+
+```bash
+uv run streamlit run app/operations_dashboard.py --server.address 127.0.0.1
+```
+
+The dashboard lazily reads platform health, generation history, bounded or explicitly requested
+deep validation, cleanup classifications, restoration provenance, safe retrieval-quality reports,
+and optional MLflow experiment availability. It has no cleanup, restoration, publication,
+deletion, or status-change controls and does not initialize embedding, reranker, Bedrock, or judge
+models. It displays only allowlisted metadata—never database/Qdrant connection strings, raw
+queries, source or chunk text, payloads, PII values, principals, access groups, or credentials.
+This is not an authenticated production administration console: run it locally as shown, or place
+it behind appropriate external authentication and network controls.
+
 Cleanup planning is read-only. Physical deletion requires both flags:
 
 ```bash

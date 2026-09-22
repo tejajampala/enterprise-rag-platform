@@ -367,6 +367,35 @@ validation additionally scrolls points to check point/lineage identity, membersh
 PII, payload schema, and vector presence. RETIRED collections missing after cleanup and FAILED rows
 without collections remain valid historical states; missing ACTIVE storage is an operational error.
 
+The separate `app/operations_dashboard.py` is a read-only presentation boundary over those same
+operations services:
+
+```text
+explicit Refresh / Deep Validate action
+                    |
+                    v
+ short-lived PostgreSQL + Qdrant read connections
+                    |
+                    v
+       ManagedIndexOperationsService
+          |            |             |
+       status       validation    cleanup plan
+          |
+          +--> generation/restoration provenance
+
+safe RetrievalQualityReport JSON --> existing comparison helpers
+optional MLflow check              --> experiment lookup only
+```
+
+Page startup loads configuration only. Connections are lazy and short-lived; deep validation is
+never run on an ordinary rerun. The dashboard imports no embedding/reranker provider, Bedrock
+client, RAG pipeline, or judge and exposes no mutation controls. Each optional section isolates
+connection/read failures so unavailable PostgreSQL, Qdrant, or MLflow does not crash unrelated
+report rendering. Tables use explicit metadata allowlists and withhold stored failure text,
+free-form restoration reasons, payloads, queries, contexts, PII values, principals, groups,
+credentials, and connection strings. Deployment must bind locally or supply external
+authentication; the dashboard does not invent an identity system.
+
 The pure cleanup planner protects ACTIVE, READY, and BUILDING states, the newest configured number
 of RETIRED generations, and RETIRED generations inside the configured minimum-age grace period.
 Older canonical RETIRED collections and present canonical FAILED collections can be eligible.
