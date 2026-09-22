@@ -22,7 +22,12 @@ from consumer_finance_rag.lineage.managed_retrieval import (
     build_managed_retrieval_runtime,
 )
 from consumer_finance_rag.lineage.repository import LineageRepository
-from consumer_finance_rag.observability import Tracer, build_tracer
+from consumer_finance_rag.observability import (
+    RetrievalTelemetryContext,
+    RetrievalTelemetrySink,
+    Tracer,
+    build_tracer,
+)
 from consumer_finance_rag.pipeline import RAGPipeline
 from consumer_finance_rag.providers import (
     HuggingFaceEmbeddingProvider,
@@ -75,6 +80,7 @@ def build_retrieval_service(
     *,
     bm25_state_path: str | Path = "data/index/bm25_state.json",
     tracer: Tracer | None = None,
+    telemetry_sink: RetrievalTelemetrySink | None = None,
 ) -> HybridRetrievalService:
     active_tracer = tracer or build_tracer(settings.mlflow)
     embedding = HuggingFaceEmbeddingProvider(
@@ -98,6 +104,15 @@ def build_retrieval_service(
         settings=settings.retrieval,
         tracer=active_tracer,
         collection_name=settings.qdrant.collection_name,
+        telemetry_context=RetrievalTelemetryContext(
+            profile=(
+                "evaluation"
+                if settings.runtime.profile == "evaluation"
+                else "fixture"
+            ),
+            qdrant_collection=settings.qdrant.collection_name,
+        ),
+        telemetry_sink=telemetry_sink,
     )
 
 
@@ -105,13 +120,21 @@ def build_runtime_retrieval(
     settings: AppSettings,
     *,
     tracer: Tracer | None = None,
+    telemetry_sink: RetrievalTelemetrySink | None = None,
 ) -> RetrievalRuntime:
     """Dispatch explicitly without changing legacy fixture/evaluation builders."""
 
     active_tracer = tracer or build_tracer(settings.mlflow)
     profile = settings.runtime.profile
     if profile == "fixture":
-        service = build_retrieval_service(settings, tracer=active_tracer)
+        if telemetry_sink is None:
+            service = build_retrieval_service(settings, tracer=active_tracer)
+        else:
+            service = build_retrieval_service(
+                settings,
+                tracer=active_tracer,
+                telemetry_sink=telemetry_sink,
+            )
         return RetrievalRuntime(
             profile="fixture",
             retrieval_service=service,
@@ -119,11 +142,19 @@ def build_runtime_retrieval(
         )
     if profile == "evaluation":
         evaluation_settings = evaluation_runtime_settings(settings)
-        service = build_retrieval_service(
-            evaluation_settings,
-            bm25_state_path=settings.evaluation.bm25_state_path,
-            tracer=active_tracer,
-        )
+        if telemetry_sink is None:
+            service = build_retrieval_service(
+                evaluation_settings,
+                bm25_state_path=settings.evaluation.bm25_state_path,
+                tracer=active_tracer,
+            )
+        else:
+            service = build_retrieval_service(
+                evaluation_settings,
+                bm25_state_path=settings.evaluation.bm25_state_path,
+                tracer=active_tracer,
+                telemetry_sink=telemetry_sink,
+            )
         return RetrievalRuntime(
             profile="evaluation",
             retrieval_service=service,
@@ -138,6 +169,7 @@ def build_runtime_retrieval(
                 settings,
                 LineageRepository(session),
                 tracer=active_tracer,
+                telemetry_sink=telemetry_sink,
             )
     finally:
         engine.dispose()
@@ -189,16 +221,22 @@ def build_application_runtime(
     settings: AppSettings,
     *,
     retrieval_runtime: RetrievalRuntime | None = None,
+    telemetry_sink: RetrievalTelemetrySink | None = None,
 ) -> ApplicationRuntime:
     """Build the explicitly selected retrieval profile and backend-agnostic RAG pipeline."""
 
     tracer = build_tracer(settings.mlflow)
     if retrieval_runtime is None:
-        runtime = build_runtime_retrieval(settings, tracer=tracer)
+        runtime = build_runtime_retrieval(
+            settings,
+            tracer=tracer,
+            telemetry_sink=telemetry_sink,
+        )
     else:
         service = _retrieval_with_tracer(
             retrieval_runtime.retrieval_service,
             tracer,
+            telemetry_sink=telemetry_sink,
         )
         runtime = replace(retrieval_runtime, retrieval_service=service)
     managed = runtime.profile == "managed"
@@ -220,6 +258,8 @@ def build_application_runtime(
 def _retrieval_with_tracer(
     service: HybridRetrievalService,
     tracer: Tracer,
+    *,
+    telemetry_sink: RetrievalTelemetrySink | None = None,
 ) -> HybridRetrievalService:
     """Reuse one pinned backend/model set while enabling request-time tracing."""
 
@@ -234,6 +274,8 @@ def _retrieval_with_tracer(
         access_control_enabled=service.access_control_enabled,
         pii_handling_enabled=service.pii_handling_enabled,
         pii_detector=service.pii_detector,
+        telemetry_context=service.telemetry_context,
+        telemetry_sink=telemetry_sink or service.telemetry_sink,
     )
 
 

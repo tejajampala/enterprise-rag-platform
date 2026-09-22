@@ -31,7 +31,11 @@ from consumer_finance_rag.lineage.repository import (
     InvalidLineageStateError,
     LineageRepository,
 )
-from consumer_finance_rag.observability import Tracer
+from consumer_finance_rag.observability import (
+    RetrievalTelemetryContext,
+    RetrievalTelemetrySink,
+    Tracer,
+)
 from consumer_finance_rag.providers import (
     EmbeddingProvider,
     HuggingFaceEmbeddingProvider,
@@ -91,6 +95,7 @@ def build_managed_retrieval_runtime(
     embedding_provider: EmbeddingProvider | None = None,
     reranker_provider: RerankerProvider | None = None,
     tracer: Tracer | None = None,
+    telemetry_sink: RetrievalTelemetrySink | None = None,
 ) -> ManagedRetrievalRuntime:
     """Pin the configured corpus's single ACTIVE generation for this process."""
 
@@ -177,6 +182,13 @@ def build_managed_retrieval_runtime(
         collection_name=active.qdrant_collection,
         access_control_enabled=True,
         pii_handling_enabled=True,
+        telemetry_context=RetrievalTelemetryContext(
+            profile="managed",
+            index_state_id=active.index_state_id,
+            generation=active.generation,
+            qdrant_collection=active.qdrant_collection,
+        ),
+        telemetry_sink=telemetry_sink,
     )
     return ManagedRetrievalRuntime(
         index_state_id=active.index_state_id,

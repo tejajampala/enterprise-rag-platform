@@ -33,6 +33,10 @@ from consumer_finance_rag.lineage.repository import (
     LineageRepository,
 )
 from consumer_finance_rag.models import RetrievedChunk
+from consumer_finance_rag.observability import (
+    RetrievalMetrics,
+    RetrievalTelemetrySink,
+)
 from consumer_finance_rag.sparse import (
     BM25SparseEncoder,
     bm25_state_hash,
@@ -81,6 +85,14 @@ class FakeReranker:
     ) -> list[RetrievedChunk]:
         del query
         return list(candidates[:top_k])
+
+
+class RecordingTelemetrySink:
+    def __init__(self) -> None:
+        self.events: list[RetrievalMetrics] = []
+
+    def emit(self, metrics: RetrievalMetrics) -> None:
+        self.events.append(metrics)
 
 
 def settings() -> AppSettings:
@@ -277,6 +289,7 @@ def build(
     *,
     embedding: FakeEmbeddingProvider | None = None,
     reranker: FakeReranker | None = None,
+    telemetry_sink: RetrievalTelemetrySink | None = None,
 ) -> Any:
     with Session(engine) as session:
         return build_managed_retrieval_runtime(
@@ -286,6 +299,7 @@ def build(
             embedding_provider=embedding
             or FakeEmbeddingProvider(app_settings.models.embedding.model),
             reranker_provider=reranker or FakeReranker(),
+            telemetry_sink=telemetry_sink,
         )
 
 
@@ -585,6 +599,7 @@ def test_resolution_performs_no_database_or_qdrant_mutations(
     _state_id, _corpus_id, encoder = seed_generation(engine, app_settings)
     client = QdrantClient(":memory:")
     create_physical_collection(client, app_settings, encoder)
+    telemetry_sink = RecordingTelemetrySink()
     with Session(engine) as session:
         count_before = session.scalar(select(func.count()).select_from(IndexState))
         for method in ("create_collection", "delete_collection", "upsert"):
@@ -603,8 +618,11 @@ def test_resolution_performs_no_database_or_qdrant_mutations(
                 app_settings.models.embedding.model
             ),
             reranker_provider=FakeReranker(),
+            telemetry_sink=telemetry_sink,
         )
         assert runtime.generation == 1
+        runtime.retrieval_service.retrieve("fraud payment", top_k=1)
+        assert telemetry_sink.events[-1].generation == 1
         assert not session.new
         assert not session.dirty
         assert not session.deleted
@@ -618,7 +636,13 @@ def test_runtime_remains_pinned_until_explicit_rebuild() -> None:
     _first_id, corpus_id, encoder = seed_generation(engine, app_settings)
     client = QdrantClient(":memory:")
     first_collection = create_physical_collection(client, app_settings, encoder)
-    first_runtime = build(engine, app_settings, client)
+    first_sink = RecordingTelemetrySink()
+    first_runtime = build(
+        engine,
+        app_settings,
+        client,
+        telemetry_sink=first_sink,
+    )
 
     identity = configuration_identity(app_settings)
     with Session(engine) as session, session.begin():
@@ -672,6 +696,10 @@ def test_runtime_remains_pinned_until_explicit_rebuild() -> None:
     assert first_runtime.generation == 1
     assert first_runtime.qdrant_collection == first_collection
     assert first_runtime.retrieval_service.store.settings.collection_name == first_collection
+    first_runtime.retrieval_service.retrieve("fraud payment", top_k=1)
+    assert first_sink.events[-1].generation == 1
+    assert first_sink.events[-1].index_state_id == first_runtime.index_state_id
+    assert first_sink.events[-1].qdrant_collection == first_collection
 
     second_runtime = build(engine, app_settings, client)
     assert second_runtime.generation == 2

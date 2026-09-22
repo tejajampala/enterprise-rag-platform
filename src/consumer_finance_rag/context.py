@@ -21,7 +21,7 @@ class ContextBuilder:
             span_type="RETRIEVER",
             attributes={"context.max_characters": self.max_characters},
         ) as span:
-            span.set_inputs({"chunk_ids": [item.chunk.chunk_id for item in chunks]})
+            span.set_inputs({"candidate_count": len(chunks)})
             result = self._build(chunks)
             span.set_attributes(
                 {

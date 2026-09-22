@@ -85,9 +85,24 @@ allowed by application code.
 
 An MLflow **trace** represents one production RAG request. Its nested **spans** represent the
 embedding, dense HNSW search, sparse BM25 search, RRF, reranking, context construction, and
-Bedrock call. Span duration supplies stage latency without a second timing subsystem. Compact IDs,
-ranks, models, retrieval parameters, token usage, stop reason, and AWS request ID are recorded;
-dense vectors and unnecessary full payloads are not.
+Bedrock call. Retrieval spans record safe counts, ranks, scores, model/configuration identity, and
+stage structure. Raw queries, chunk/document text, titles, source URLs, principals, and access-group
+names are omitted. Bedrock token usage, stop reason, and AWS request ID remain available without
+recording prompts.
+
+Phase 3 managed retrieval also emits one immutable `RetrievalMetrics` event when each request
+finishes or fails. It includes the runtime-pinned `index_state_id`, generation, collection, profile,
+stage latencies, candidate/final counts, ACL mode and rejection count, caller group count, PII
+policy and aggregate PII type/redaction counts, and a bounded failure stage. It never contains raw
+query or chunk text, matched PII values, principal identity, group names, credentials, or exception
+messages. Fixture and evaluation traces use their real profile/collection but leave generation and
+index-state fields null.
+
+`RetrievalTelemetrySink` defaults to an in-process no-op, so no external monitoring service is
+required. `StructuredLoggingRetrievalTelemetrySink` is an opt-in Python logging implementation
+that emits a JSON allowlist. Prometheus, OpenTelemetry, Datadog, CloudWatch, and other remote
+backends are intentionally deferred; another sink can be injected later without changing the
+retrieval algorithm.
 
 An MLflow **run** represents an evaluation experiment. It records model/config parameters,
 aggregate metrics, Git SHA, and report artifacts. Traces explain individual executions; runs make

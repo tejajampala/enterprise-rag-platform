@@ -167,6 +167,9 @@ def test_tracing_preserves_output_and_has_expected_hierarchy(
         ("context_build", "rag_request"),
         ("bedrock_generation", "rag_request"),
     ]
+    recorded = repr(tracer.records)
+    assert "Question?" not in recorded
+    assert candidate.chunk.text not in recorded
 
 
 def test_bedrock_usage_maps_to_response_and_mlflow_token_attribute() -> None:

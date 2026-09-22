@@ -431,8 +431,8 @@ The final transaction requires the candidate to remain READY, the historical sou
 RETIRED, and the ACTIVE row to match the plan baseline. Any concurrent publication aborts the
 switch and marks the candidate FAILED, leaving the unexpected newer ACTIVE untouched. Cleanup
 protects a RETIRED source referenced by a BUILDING/READY restoration candidate, then treats it and
-the newly retired former ACTIVE normally after restoration completes. Runtime leases, telemetry,
-and restoration from a cleaned collection remain deliberately deferred.
+the newly retired former ACTIVE normally after restoration completes. Runtime leases, external
+telemetry backends, and restoration from a cleaned collection remain deliberately deferred.
 
 Managed retrieval resolution is a separate, explicit factory boundary:
 
@@ -553,9 +553,10 @@ chunks, then compares every live Qdrant `chunk_id`/`chunk_hash` payload with the
 
 ## Tracing design
 
-`observability.py` is a small adapter around current manual MLflow spans. When disabled it returns
-a no-op implementation with the same protocol, so instrumentation does not branch or duplicate
-the application pipeline.
+`observability.py` contains two independent, dependency-free boundaries: the existing manual
+MLflow span adapter and request-level `RetrievalTelemetrySink`. Both default to no-op
+implementations, so instrumentation does not branch or duplicate the application pipeline and no
+monitoring service is required.
 
 ```text
 rag_request (CHAIN)
@@ -568,12 +569,43 @@ rag_request (CHAIN)
 └── bedrock_generation (CHAT_MODEL)
 ```
 
-The root records model/config identity and actual candidate counts. Retrieval spans use chunk IDs,
-titles, ranks, and scores rather than dense vectors or unrestricted payloads. `context_build`
-emits MLflow's standard retriever document shape for final evidence only. The Bedrock span records
-the model/provider, stop reason, request ID, and `mlflow.chat.tokenUsage` when Converse returns all
-usage fields. Span duration is the latency source. Cost remains unset unless MLflow can calculate
-it from real model/usage metadata.
+The root and retrieval spans record safe model/configuration identity, aggregate counts, ranks, and
+scores. They omit query text, document/chunk text, titles, URLs, principals, and access-group names;
+`context_build` emits only placeholder content and ranks. The Bedrock span records the
+model/provider, stop reason, request ID, and `mlflow.chat.tokenUsage` when Converse returns all
+usage fields. Cost remains unset unless MLflow can calculate it from real model/usage metadata.
+
+The shared `HybridRetrievalService` produces exactly one immutable `RetrievalMetrics` terminal
+event around its existing dense, sparse, fusion, reranker, ACL, and PII flow:
+
+```text
+RetrievalTelemetryContext (pinned at runtime construction)
+       profile + optional managed generation identity
+                         |
+                         v
+ dense -> ACL -> sparse -> ACL -> fusion -> reranker -> ACL -> PII
+                         |
+                         v
+ RetrievalMetrics SUCCESS or ERROR
+                         |
+             +-----------+-----------+
+             |                       |
+       no-op sink (default)    structured JSON logging
+```
+
+Managed context is created from the already-resolved `ManagedRetrievalRuntime`, so every event
+reports the generation pinned to that process/session and never re-reads ACTIVE per query. Fixture
+and evaluation contexts cannot carry an index-state ID or generation. The event records monotonic
+non-negative stage/total latency, candidate and final counts, ACL filtering mode, caller group
+count, defense-in-depth rejection count, PII policy, redacted-context count, and aggregate PII type
+counts. It contains neither matched values nor group/principal identity. Errors are classified as
+`dense`, `sparse`, `fusion`, `reranker`, `ACL`, `PII`, or `other`; only the exception class is
+recorded, and the original exception is re-raised unchanged. Sink failures are isolated from the
+retrieval result and exception path.
+
+`StructuredLoggingRetrievalTelemetrySink` uses only Python logging and a JSON allowlist. External
+telemetry backends and persistence are future sink implementations. This milestone adds no schema,
+PostgreSQL write, Qdrant write, polling, or generation lifecycle behavior.
 
 A **trace** describes one request and its causal span tree. An evaluation **run** groups experiment
 parameters, aggregate metrics, artifacts, and links to traces. They answer different questions:

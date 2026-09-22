@@ -47,7 +47,7 @@ class RAGPipeline:
             **self.trace_attributes,
         }
         with self.tracer.span("rag_request", span_type="CHAIN", attributes=attributes) as span:
-            span.set_inputs({"question": question})
+            span.set_inputs({"query_characters": len(question)})
             retrieval_result = self.retrieval.retrieve(
                 question,
                 access_context=access_context,
@@ -80,8 +80,8 @@ class RAGPipeline:
             )
             span.set_outputs(
                 {
-                    "answer": response.answer,
-                    "citations": [item.model_dump() for item in response.citations],
+                    "answer_characters": len(response.answer),
+                    "citation_count": len(response.citations),
                 }
             )
             return response
