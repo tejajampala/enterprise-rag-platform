@@ -588,9 +588,9 @@ RetrievalTelemetryContext (pinned at runtime construction)
                          v
  RetrievalMetrics SUCCESS or ERROR
                          |
-             +-----------+-----------+
-             |                       |
-       no-op sink (default)    structured JSON logging
+             +-----------+-----------+----------------+
+             |                       |                |
+       no-op sink (default)    structured JSON   active MLflow run
 ```
 
 Managed context is created from the already-resolved `ManagedRetrievalRuntime`, so every event
@@ -603,9 +603,12 @@ counts. It contains neither matched values nor group/principal identity. Errors 
 recorded, and the original exception is re-raised unchanged. Sink failures are isolated from the
 retrieval result and exception path.
 
-`StructuredLoggingRetrievalTelemetrySink` uses only Python logging and a JSON allowlist. External
-telemetry backends and persistence are future sink implementations. This milestone adds no schema,
-PostgreSQL write, Qdrant write, polling, or generation lifecycle behavior.
+`StructuredLoggingRetrievalTelemetrySink` uses only Python logging and a JSON allowlist.
+`MLflowRetrievalTelemetrySink` optionally appends numeric aggregates and safe identity/status tags
+to a caller-owned active run. It never creates one run per request; disabled settings, no active
+run, an unavailable server, or a logging failure all become a no-op. Other external telemetry
+backends remain future sink implementations. This adds no application schema, PostgreSQL write,
+Qdrant write, polling, or generation lifecycle behavior.
 
 A **trace** describes one request and its causal span tree. An evaluation **run** groups experiment
 parameters, aggregate metrics, artifacts, and links to traces. They answer different questions:
@@ -684,8 +687,34 @@ hit-rate deltas plus improved, regressed, unchanged, newly missed, and newly rec
 Explicit `max_recall_drop` and `max_mrr_drop` settings can produce a pure PASS/FAIL result for CI.
 They are runtime evaluation policy, not immutable index configuration, and have no publication,
 restoration, database, or Qdrant side effects. The first report format is
-`retrieval-quality-report-v1`; MLflow persistence and automatic deployment blocking remain
-deferred.
+`retrieval-quality-report-v1`; automatic deployment blocking remains deferred.
+
+The optional MLflow adapter is reporting-only:
+
+```text
+RetrievalQualityReport
+          |
+          v
+ optional MLflow adapter
+          |
+          v
+ MLflow experiment/run
+
+RetrievalMetrics
+          |
+          v
+ optional telemetry sink
+          |
+          +----> MLflow active run
+          +----> structured logging
+```
+
+For quality evaluation, the adapter reuses the configured evaluation experiment and existing run
+utility, logging generation/build parameters, Recall@K, MRR, hit rate, missed-case count, and the
+safe report artifact. Optional comparisons add objective deltas, case classification counts, and
+the explicit threshold PASS/FAIL result. It never logs queries, context text, matched PII values,
+principal IDs, credentials, or group names. Without `--log-mlflow`, managed quality evaluation
+does not initialize MLflow at all.
 
 ## MLflow GenAI and RAGAS
 

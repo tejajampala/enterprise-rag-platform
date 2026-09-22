@@ -8,8 +8,9 @@ from pathlib import Path
 
 from sqlalchemy.orm import Session
 
-from consumer_finance_rag.config import load_settings
+from consumer_finance_rag.config import AppSettings, load_settings
 from consumer_finance_rag.evaluation.dataset import load_evaluation_set
+from consumer_finance_rag.evaluation.tracking import evaluation_run
 from consumer_finance_rag.lineage.database import (
     create_database_engine,
     require_database_url,
@@ -19,6 +20,9 @@ from consumer_finance_rag.lineage.managed_retrieval import (
     build_managed_retrieval_runtime,
 )
 from consumer_finance_rag.lineage.repository import LineageRepository
+from consumer_finance_rag.mlflow_retrieval_tracking import (
+    log_retrieval_quality_report,
+)
 from consumer_finance_rag.observability import NoOpTracer
 from consumer_finance_rag.retrieval_quality import (
     RetrievalEvaluationCase,
@@ -52,11 +56,15 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--k", type=_positive_int, default=None)
     parser.add_argument("--output", type=Path, default=None)
+    parser.add_argument(
+        "--log-mlflow",
+        action="store_true",
+        help="Log the safe report to the configured MLflow evaluation experiment.",
+    )
     return parser
 
 
-def _build_current_runtime(config_path: Path) -> tuple[ManagedRetrievalRuntime, Path]:
-    settings = load_settings(config_path)
+def _build_current_runtime(settings: AppSettings) -> ManagedRetrievalRuntime:
     require_database_url(settings.database)
     engine = create_database_engine(settings.database)
     try:
@@ -68,13 +76,14 @@ def _build_current_runtime(config_path: Path) -> tuple[ManagedRetrievalRuntime, 
             )
     finally:
         engine.dispose()
-    return runtime, settings.evaluation.dataset_path
+    return runtime
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    runtime, default_dataset_path = _build_current_runtime(args.config)
-    dataset = load_evaluation_set(args.dataset or default_dataset_path)
+    settings = load_settings(args.config)
+    runtime = _build_current_runtime(settings)
+    dataset = load_evaluation_set(args.dataset or settings.evaluation.dataset_path)
     cases = evaluation_cases_from_seed(dataset)
 
     def show_progress(
@@ -104,6 +113,17 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.output is not None:
         output = write_retrieval_quality_report(report, args.output)
         print(f"JSON report: {output}")
+    if args.log_mlflow:
+        with evaluation_run(
+            settings.mlflow,
+            run_name=f"managed-retrieval-quality-g{report.generation:06d}",
+        ) as run:
+            log_retrieval_quality_report(report, run)
+            run_id = run.run_id
+        if run_id is None:
+            print("MLflow logging: disabled by configuration")
+        else:
+            print(f"MLflow run ID: {run_id}")
     return 0
 
 

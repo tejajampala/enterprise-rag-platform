@@ -100,9 +100,10 @@ index-state fields null.
 
 `RetrievalTelemetrySink` defaults to an in-process no-op, so no external monitoring service is
 required. `StructuredLoggingRetrievalTelemetrySink` is an opt-in Python logging implementation
-that emits a JSON allowlist. Prometheus, OpenTelemetry, Datadog, CloudWatch, and other remote
-backends are intentionally deferred; another sink can be injected later without changing the
-retrieval algorithm.
+that emits a JSON allowlist. `MLflowRetrievalTelemetrySink` can append the same aggregate-safe
+request data to a caller-supplied active MLflow run; it never creates a run per query, and MLflow
+failures degrade to a no-op. Prometheus, OpenTelemetry, Datadog, CloudWatch, and other remote
+backends remain deferred.
 
 Managed retrieval quality is measured separately with deterministic golden cases. `RetrievalMetrics`
 is operational telemetry for one request; `RetrievalQualityReport` is a controlled, offline report
@@ -430,17 +431,23 @@ To evaluate the currently ACTIVE managed generation through a runtime pinned onc
 
 ```bash
 uv run python scripts/evaluate_managed_retrieval.py --current
+uv run python scripts/evaluate_managed_retrieval.py --current --log-mlflow
 uv run python scripts/evaluate_managed_retrieval.py --current \
   --output artifacts/retrieval_quality_current.json
 ```
 
 This command reuses the Phase 2 seed cases and metric formulas, does not call Bedrock or an LLM
-judge, and does not require MLflow. Optional JSON uses
+judge, and does not require MLflow unless `--log-mlflow` is explicitly passed. The opt-in mode uses
+the configured evaluation experiment, logs safe generation/configuration parameters, aggregate
+quality metrics, and the versioned JSON artifact, then prints the MLflow run ID. Optional JSON uses
 `retrieval-quality-report-v1` and contains only generation/configuration identity, aggregate
 metrics, case IDs, safe retrieved identities, and per-case scores. The pure comparison helper
 reports metric deltas plus improved, regressed, newly missed, and newly recovered case IDs.
 Optional `max_recall_drop` and `max_mrr_drop` thresholds produce a side-effect-free PASS/FAIL
-result for CI; they do not publish, restore, or block a generation automatically.
+result for CI; they do not publish, restore, or block a generation automatically. Operational
+`RetrievalMetrics` and offline `RetrievalQualityReport` logging remain separate, and neither
+adapter logs raw queries, retrieved context, matched PII values, principals, credentials, or group
+names.
 
 The CLI prints distinct embedding-load and reranker-load phases, warms each configured model once,
 then reports every case as it enters the unchanged `retrieve_debug()` production path. To download
