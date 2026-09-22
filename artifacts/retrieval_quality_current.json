@@ -1,0 +1,1652 @@
+{
+  "format_version": "retrieval-quality-report-v1",
+  "generated_at": "2026-09-22T11:23:14.127489Z",
+  "generation": 4,
+  "index_state_id": "d91dc9ef-4cd1-4971-9bec-976d8c591e5b",
+  "qdrant_collection": "consumer_finance_managed_g000004",
+  "snapshot_hash": "f58f3b525a02585c3364ff62ec49375dae42158d8f91cae25f5feafcf00b927e",
+  "embedding_fingerprint": "a0b044b1c899dd72b61c9c6893c29cc54a8a91685c6b2b3602cf3ed855e09454",
+  "chunking_fingerprint": "160b95c80b92f1100690dac2de518cf905ccf6e254fd7c3d742af412181d5d56",
+  "index_configuration_fingerprint": "3270c91d677970350fd6589efaa86738c41403b627e2fc6cea521e9c28b5b502",
+  "retrieval_settings": {
+    "dense_candidates": 20,
+    "sparse_candidates": 20,
+    "fused_candidates": 12,
+    "final_contexts": 5,
+    "rrf_k": 60,
+    "hnsw_ef": null,
+    "reranker_model": "Qwen/Qwen3-Reranker-0.6B",
+    "acl_filtering_enabled": true,
+    "pii_policy": "REDACT"
+  },
+  "case_count": 36,
+  "metrics": {
+    "k": 5,
+    "recall_at_k": 1.0,
+    "mrr": 1.0,
+    "hit_rate": 1.0,
+    "missed_case_count": 0
+  },
+  "cases": [
+    {
+      "case_id": "cards-001",
+      "generation": 4,
+      "qdrant_collection": "consumer_finance_managed_g000004",
+      "identity_kind": "chunk_id",
+      "expected_ids": [
+        "cfpb-credit-card-terms:91fe25c3855fcedf:0:91fe25c3855f"
+      ],
+      "expected_access": true,
+      "access_expectation_met": true,
+      "retrieved_identities": [
+        {
+          "source_id": "cfpb-credit-card-terms",
+          "document_id": "cfpb-credit-card-terms:91fe25c3855fcedf",
+          "chunk_id": "cfpb-credit-card-terms:91fe25c3855fcedf:0:91fe25c3855f"
+        },
+        {
+          "source_id": "cfpb-bank-account-overdraft",
+          "document_id": "cfpb-bank-account-overdraft:dd62aae82cd9bfce",
+          "chunk_id": "cfpb-bank-account-overdraft:dd62aae82cd9bfce:0:dd62aae82cd9"
+        },
+        {
+          "source_id": "cfpb-payment-fraud",
+          "document_id": "cfpb-payment-fraud:b0e536079a0af82d",
+          "chunk_id": "cfpb-payment-fraud:b0e536079a0af82d:0:b0e536079a0a"
+        },
+        {
+          "source_id": "cfpb-mortgage-closing-disclosure",
+          "document_id": "cfpb-mortgage-closing-disclosure:c439f57258e3c577",
+          "chunk_id": "cfpb-mortgage-closing-disclosure:c439f57258e3c577:0:c439f57258e3"
+        },
+        {
+          "source_id": "cfpb-credit-report-errors",
+          "document_id": "cfpb-credit-report-errors:7c6f2a7acdac76c5",
+          "chunk_id": "cfpb-credit-report-errors:7c6f2a7acdac76c5:0:7c6f2a7acdac"
+        }
+      ],
+      "hit_at_k": true,
+      "recall_at_k": 1.0,
+      "reciprocal_rank": 1.0,
+      "expected_rank": 1,
+      "final_context_count": 5,
+      "scenario": null,
+      "category": "credit cards"
+    },
+    {
+      "case_id": "cards-002",
+      "generation": 4,
+      "qdrant_collection": "consumer_finance_managed_g000004",
+      "identity_kind": "chunk_id",
+      "expected_ids": [
+        "cfpb-credit-card-terms:91fe25c3855fcedf:0:91fe25c3855f"
+      ],
+      "expected_access": true,
+      "access_expectation_met": true,
+      "retrieved_identities": [
+        {
+          "source_id": "cfpb-credit-card-terms",
+          "document_id": "cfpb-credit-card-terms:91fe25c3855fcedf",
+          "chunk_id": "cfpb-credit-card-terms:91fe25c3855fcedf:0:91fe25c3855f"
+        },
+        {
+          "source_id": "cfpb-bank-account-overdraft",
+          "document_id": "cfpb-bank-account-overdraft:dd62aae82cd9bfce",
+          "chunk_id": "cfpb-bank-account-overdraft:dd62aae82cd9bfce:0:dd62aae82cd9"
+        },
+        {
+          "source_id": "cfpb-mortgage-closing-disclosure",
+          "document_id": "cfpb-mortgage-closing-disclosure:c439f57258e3c577",
+          "chunk_id": "cfpb-mortgage-closing-disclosure:c439f57258e3c577:0:c439f57258e3"
+        },
+        {
+          "source_id": "cfpb-payment-fraud",
+          "document_id": "cfpb-payment-fraud:b0e536079a0af82d",
+          "chunk_id": "cfpb-payment-fraud:b0e536079a0af82d:0:b0e536079a0a"
+        },
+        {
+          "source_id": "cfpb-debt-validation",
+          "document_id": "cfpb-debt-validation:c8320c420c8460c4",
+          "chunk_id": "cfpb-debt-validation:c8320c420c8460c4:0:c8320c420c84"
+        }
+      ],
+      "hit_at_k": true,
+      "recall_at_k": 1.0,
+      "reciprocal_rank": 1.0,
+      "expected_rank": 1,
+      "final_context_count": 5,
+      "scenario": null,
+      "category": "credit cards"
+    },
+    {
+      "case_id": "cards-003",
+      "generation": 4,
+      "qdrant_collection": "consumer_finance_managed_g000004",
+      "identity_kind": "chunk_id",
+      "expected_ids": [
+        "cfpb-credit-card-terms:91fe25c3855fcedf:0:91fe25c3855f"
+      ],
+      "expected_access": true,
+      "access_expectation_met": true,
+      "retrieved_identities": [
+        {
+          "source_id": "cfpb-credit-card-terms",
+          "document_id": "cfpb-credit-card-terms:91fe25c3855fcedf",
+          "chunk_id": "cfpb-credit-card-terms:91fe25c3855fcedf:0:91fe25c3855f"
+        },
+        {
+          "source_id": "cfpb-mortgage-closing-disclosure",
+          "document_id": "cfpb-mortgage-closing-disclosure:c439f57258e3c577",
+          "chunk_id": "cfpb-mortgage-closing-disclosure:c439f57258e3c577:0:c439f57258e3"
+        },
+        {
+          "source_id": "cfpb-debt-validation",
+          "document_id": "cfpb-debt-validation:c8320c420c8460c4",
+          "chunk_id": "cfpb-debt-validation:c8320c420c8460c4:0:c8320c420c84"
+        },
+        {
+          "source_id": "cfpb-credit-report-errors",
+          "document_id": "cfpb-credit-report-errors:7c6f2a7acdac76c5",
+          "chunk_id": "cfpb-credit-report-errors:7c6f2a7acdac76c5:0:7c6f2a7acdac"
+        },
+        {
+          "source_id": "cfpb-payment-fraud",
+          "document_id": "cfpb-payment-fraud:b0e536079a0af82d",
+          "chunk_id": "cfpb-payment-fraud:b0e536079a0af82d:0:b0e536079a0a"
+        }
+      ],
+      "hit_at_k": true,
+      "recall_at_k": 1.0,
+      "reciprocal_rank": 1.0,
+      "expected_rank": 1,
+      "final_context_count": 5,
+      "scenario": null,
+      "category": "credit cards"
+    },
+    {
+      "case_id": "cards-004",
+      "generation": 4,
+      "qdrant_collection": "consumer_finance_managed_g000004",
+      "identity_kind": "chunk_id",
+      "expected_ids": [
+        "cfpb-credit-card-terms:91fe25c3855fcedf:0:91fe25c3855f"
+      ],
+      "expected_access": true,
+      "access_expectation_met": true,
+      "retrieved_identities": [
+        {
+          "source_id": "cfpb-credit-card-terms",
+          "document_id": "cfpb-credit-card-terms:91fe25c3855fcedf",
+          "chunk_id": "cfpb-credit-card-terms:91fe25c3855fcedf:0:91fe25c3855f"
+        },
+        {
+          "source_id": "cfpb-mortgage-closing-disclosure",
+          "document_id": "cfpb-mortgage-closing-disclosure:c439f57258e3c577",
+          "chunk_id": "cfpb-mortgage-closing-disclosure:c439f57258e3c577:0:c439f57258e3"
+        },
+        {
+          "source_id": "cfpb-bank-account-overdraft",
+          "document_id": "cfpb-bank-account-overdraft:dd62aae82cd9bfce",
+          "chunk_id": "cfpb-bank-account-overdraft:dd62aae82cd9bfce:0:dd62aae82cd9"
+        },
+        {
+          "source_id": "cfpb-debt-validation",
+          "document_id": "cfpb-debt-validation:c8320c420c8460c4",
+          "chunk_id": "cfpb-debt-validation:c8320c420c8460c4:0:c8320c420c84"
+        },
+        {
+          "source_id": "cfpb-payment-fraud",
+          "document_id": "cfpb-payment-fraud:b0e536079a0af82d",
+          "chunk_id": "cfpb-payment-fraud:b0e536079a0af82d:0:b0e536079a0a"
+        }
+      ],
+      "hit_at_k": true,
+      "recall_at_k": 1.0,
+      "reciprocal_rank": 1.0,
+      "expected_rank": 1,
+      "final_context_count": 5,
+      "scenario": null,
+      "category": "credit cards"
+    },
+    {
+      "case_id": "cards-005",
+      "generation": 4,
+      "qdrant_collection": "consumer_finance_managed_g000004",
+      "identity_kind": "chunk_id",
+      "expected_ids": [
+        "cfpb-credit-card-terms:91fe25c3855fcedf:0:91fe25c3855f"
+      ],
+      "expected_access": true,
+      "access_expectation_met": true,
+      "retrieved_identities": [
+        {
+          "source_id": "cfpb-credit-card-terms",
+          "document_id": "cfpb-credit-card-terms:91fe25c3855fcedf",
+          "chunk_id": "cfpb-credit-card-terms:91fe25c3855fcedf:0:91fe25c3855f"
+        },
+        {
+          "source_id": "cfpb-bank-account-overdraft",
+          "document_id": "cfpb-bank-account-overdraft:dd62aae82cd9bfce",
+          "chunk_id": "cfpb-bank-account-overdraft:dd62aae82cd9bfce:0:dd62aae82cd9"
+        },
+        {
+          "source_id": "cfpb-mortgage-closing-disclosure",
+          "document_id": "cfpb-mortgage-closing-disclosure:c439f57258e3c577",
+          "chunk_id": "cfpb-mortgage-closing-disclosure:c439f57258e3c577:0:c439f57258e3"
+        },
+        {
+          "source_id": "cfpb-credit-report-errors",
+          "document_id": "cfpb-credit-report-errors:7c6f2a7acdac76c5",
+          "chunk_id": "cfpb-credit-report-errors:7c6f2a7acdac76c5:0:7c6f2a7acdac"
+        },
+        {
+          "source_id": "cfpb-payment-fraud",
+          "document_id": "cfpb-payment-fraud:b0e536079a0af82d",
+          "chunk_id": "cfpb-payment-fraud:b0e536079a0af82d:0:b0e536079a0a"
+        }
+      ],
+      "hit_at_k": true,
+      "recall_at_k": 1.0,
+      "reciprocal_rank": 1.0,
+      "expected_rank": 1,
+      "final_context_count": 5,
+      "scenario": null,
+      "category": "credit cards"
+    },
+    {
+      "case_id": "cards-006",
+      "generation": 4,
+      "qdrant_collection": "consumer_finance_managed_g000004",
+      "identity_kind": "chunk_id",
+      "expected_ids": [
+        "cfpb-credit-card-terms:91fe25c3855fcedf:0:91fe25c3855f"
+      ],
+      "expected_access": true,
+      "access_expectation_met": true,
+      "retrieved_identities": [
+        {
+          "source_id": "cfpb-credit-card-terms",
+          "document_id": "cfpb-credit-card-terms:91fe25c3855fcedf",
+          "chunk_id": "cfpb-credit-card-terms:91fe25c3855fcedf:0:91fe25c3855f"
+        },
+        {
+          "source_id": "cfpb-mortgage-closing-disclosure",
+          "document_id": "cfpb-mortgage-closing-disclosure:c439f57258e3c577",
+          "chunk_id": "cfpb-mortgage-closing-disclosure:c439f57258e3c577:0:c439f57258e3"
+        },
+        {
+          "source_id": "cfpb-bank-account-overdraft",
+          "document_id": "cfpb-bank-account-overdraft:dd62aae82cd9bfce",
+          "chunk_id": "cfpb-bank-account-overdraft:dd62aae82cd9bfce:0:dd62aae82cd9"
+        },
+        {
+          "source_id": "cfpb-payment-fraud",
+          "document_id": "cfpb-payment-fraud:b0e536079a0af82d",
+          "chunk_id": "cfpb-payment-fraud:b0e536079a0af82d:0:b0e536079a0a"
+        },
+        {
+          "source_id": "cfpb-debt-validation",
+          "document_id": "cfpb-debt-validation:c8320c420c8460c4",
+          "chunk_id": "cfpb-debt-validation:c8320c420c8460c4:0:c8320c420c84"
+        }
+      ],
+      "hit_at_k": true,
+      "recall_at_k": 1.0,
+      "reciprocal_rank": 1.0,
+      "expected_rank": 1,
+      "final_context_count": 5,
+      "scenario": null,
+      "category": "credit cards"
+    },
+    {
+      "case_id": "reports-001",
+      "generation": 4,
+      "qdrant_collection": "consumer_finance_managed_g000004",
+      "identity_kind": "chunk_id",
+      "expected_ids": [
+        "cfpb-credit-report-errors:7c6f2a7acdac76c5:0:7c6f2a7acdac"
+      ],
+      "expected_access": true,
+      "access_expectation_met": true,
+      "retrieved_identities": [
+        {
+          "source_id": "cfpb-credit-report-errors",
+          "document_id": "cfpb-credit-report-errors:7c6f2a7acdac76c5",
+          "chunk_id": "cfpb-credit-report-errors:7c6f2a7acdac76c5:0:7c6f2a7acdac"
+        },
+        {
+          "source_id": "cfpb-debt-validation",
+          "document_id": "cfpb-debt-validation:c8320c420c8460c4",
+          "chunk_id": "cfpb-debt-validation:c8320c420c8460c4:0:c8320c420c84"
+        },
+        {
+          "source_id": "cfpb-payment-fraud",
+          "document_id": "cfpb-payment-fraud:b0e536079a0af82d",
+          "chunk_id": "cfpb-payment-fraud:b0e536079a0af82d:0:b0e536079a0a"
+        },
+        {
+          "source_id": "cfpb-bank-account-overdraft",
+          "document_id": "cfpb-bank-account-overdraft:dd62aae82cd9bfce",
+          "chunk_id": "cfpb-bank-account-overdraft:dd62aae82cd9bfce:0:dd62aae82cd9"
+        },
+        {
+          "source_id": "cfpb-mortgage-closing-disclosure",
+          "document_id": "cfpb-mortgage-closing-disclosure:c439f57258e3c577",
+          "chunk_id": "cfpb-mortgage-closing-disclosure:c439f57258e3c577:0:c439f57258e3"
+        }
+      ],
+      "hit_at_k": true,
+      "recall_at_k": 1.0,
+      "reciprocal_rank": 1.0,
+      "expected_rank": 1,
+      "final_context_count": 5,
+      "scenario": null,
+      "category": "credit reporting"
+    },
+    {
+      "case_id": "reports-002",
+      "generation": 4,
+      "qdrant_collection": "consumer_finance_managed_g000004",
+      "identity_kind": "chunk_id",
+      "expected_ids": [
+        "cfpb-credit-report-errors:7c6f2a7acdac76c5:0:7c6f2a7acdac"
+      ],
+      "expected_access": true,
+      "access_expectation_met": true,
+      "retrieved_identities": [
+        {
+          "source_id": "cfpb-credit-report-errors",
+          "document_id": "cfpb-credit-report-errors:7c6f2a7acdac76c5",
+          "chunk_id": "cfpb-credit-report-errors:7c6f2a7acdac76c5:0:7c6f2a7acdac"
+        },
+        {
+          "source_id": "cfpb-debt-validation",
+          "document_id": "cfpb-debt-validation:c8320c420c8460c4",
+          "chunk_id": "cfpb-debt-validation:c8320c420c8460c4:0:c8320c420c84"
+        },
+        {
+          "source_id": "cfpb-mortgage-closing-disclosure",
+          "document_id": "cfpb-mortgage-closing-disclosure:c439f57258e3c577",
+          "chunk_id": "cfpb-mortgage-closing-disclosure:c439f57258e3c577:0:c439f57258e3"
+        },
+        {
+          "source_id": "cfpb-payment-fraud",
+          "document_id": "cfpb-payment-fraud:b0e536079a0af82d",
+          "chunk_id": "cfpb-payment-fraud:b0e536079a0af82d:0:b0e536079a0a"
+        },
+        {
+          "source_id": "cfpb-bank-account-overdraft",
+          "document_id": "cfpb-bank-account-overdraft:dd62aae82cd9bfce",
+          "chunk_id": "cfpb-bank-account-overdraft:dd62aae82cd9bfce:0:dd62aae82cd9"
+        }
+      ],
+      "hit_at_k": true,
+      "recall_at_k": 1.0,
+      "reciprocal_rank": 1.0,
+      "expected_rank": 1,
+      "final_context_count": 5,
+      "scenario": null,
+      "category": "credit reporting"
+    },
+    {
+      "case_id": "reports-003",
+      "generation": 4,
+      "qdrant_collection": "consumer_finance_managed_g000004",
+      "identity_kind": "chunk_id",
+      "expected_ids": [
+        "cfpb-credit-report-errors:7c6f2a7acdac76c5:0:7c6f2a7acdac"
+      ],
+      "expected_access": true,
+      "access_expectation_met": true,
+      "retrieved_identities": [
+        {
+          "source_id": "cfpb-credit-report-errors",
+          "document_id": "cfpb-credit-report-errors:7c6f2a7acdac76c5",
+          "chunk_id": "cfpb-credit-report-errors:7c6f2a7acdac76c5:0:7c6f2a7acdac"
+        },
+        {
+          "source_id": "cfpb-debt-validation",
+          "document_id": "cfpb-debt-validation:c8320c420c8460c4",
+          "chunk_id": "cfpb-debt-validation:c8320c420c8460c4:0:c8320c420c84"
+        },
+        {
+          "source_id": "cfpb-bank-account-overdraft",
+          "document_id": "cfpb-bank-account-overdraft:dd62aae82cd9bfce",
+          "chunk_id": "cfpb-bank-account-overdraft:dd62aae82cd9bfce:0:dd62aae82cd9"
+        },
+        {
+          "source_id": "cfpb-payment-fraud",
+          "document_id": "cfpb-payment-fraud:b0e536079a0af82d",
+          "chunk_id": "cfpb-payment-fraud:b0e536079a0af82d:0:b0e536079a0a"
+        },
+        {
+          "source_id": "cfpb-mortgage-closing-disclosure",
+          "document_id": "cfpb-mortgage-closing-disclosure:c439f57258e3c577",
+          "chunk_id": "cfpb-mortgage-closing-disclosure:c439f57258e3c577:0:c439f57258e3"
+        }
+      ],
+      "hit_at_k": true,
+      "recall_at_k": 1.0,
+      "reciprocal_rank": 1.0,
+      "expected_rank": 1,
+      "final_context_count": 5,
+      "scenario": null,
+      "category": "credit reporting"
+    },
+    {
+      "case_id": "reports-004",
+      "generation": 4,
+      "qdrant_collection": "consumer_finance_managed_g000004",
+      "identity_kind": "chunk_id",
+      "expected_ids": [
+        "cfpb-credit-report-errors:7c6f2a7acdac76c5:0:7c6f2a7acdac"
+      ],
+      "expected_access": true,
+      "access_expectation_met": true,
+      "retrieved_identities": [
+        {
+          "source_id": "cfpb-credit-report-errors",
+          "document_id": "cfpb-credit-report-errors:7c6f2a7acdac76c5",
+          "chunk_id": "cfpb-credit-report-errors:7c6f2a7acdac76c5:0:7c6f2a7acdac"
+        },
+        {
+          "source_id": "cfpb-debt-validation",
+          "document_id": "cfpb-debt-validation:c8320c420c8460c4",
+          "chunk_id": "cfpb-debt-validation:c8320c420c8460c4:0:c8320c420c84"
+        },
+        {
+          "source_id": "cfpb-bank-account-overdraft",
+          "document_id": "cfpb-bank-account-overdraft:dd62aae82cd9bfce",
+          "chunk_id": "cfpb-bank-account-overdraft:dd62aae82cd9bfce:0:dd62aae82cd9"
+        },
+        {
+          "source_id": "cfpb-payment-fraud",
+          "document_id": "cfpb-payment-fraud:b0e536079a0af82d",
+          "chunk_id": "cfpb-payment-fraud:b0e536079a0af82d:0:b0e536079a0a"
+        },
+        {
+          "source_id": "cfpb-mortgage-closing-disclosure",
+          "document_id": "cfpb-mortgage-closing-disclosure:c439f57258e3c577",
+          "chunk_id": "cfpb-mortgage-closing-disclosure:c439f57258e3c577:0:c439f57258e3"
+        }
+      ],
+      "hit_at_k": true,
+      "recall_at_k": 1.0,
+      "reciprocal_rank": 1.0,
+      "expected_rank": 1,
+      "final_context_count": 5,
+      "scenario": null,
+      "category": "credit reporting"
+    },
+    {
+      "case_id": "reports-005",
+      "generation": 4,
+      "qdrant_collection": "consumer_finance_managed_g000004",
+      "identity_kind": "chunk_id",
+      "expected_ids": [
+        "cfpb-credit-report-errors:7c6f2a7acdac76c5:0:7c6f2a7acdac"
+      ],
+      "expected_access": true,
+      "access_expectation_met": true,
+      "retrieved_identities": [
+        {
+          "source_id": "cfpb-credit-report-errors",
+          "document_id": "cfpb-credit-report-errors:7c6f2a7acdac76c5",
+          "chunk_id": "cfpb-credit-report-errors:7c6f2a7acdac76c5:0:7c6f2a7acdac"
+        },
+        {
+          "source_id": "cfpb-payment-fraud",
+          "document_id": "cfpb-payment-fraud:b0e536079a0af82d",
+          "chunk_id": "cfpb-payment-fraud:b0e536079a0af82d:0:b0e536079a0a"
+        },
+        {
+          "source_id": "cfpb-debt-validation",
+          "document_id": "cfpb-debt-validation:c8320c420c8460c4",
+          "chunk_id": "cfpb-debt-validation:c8320c420c8460c4:0:c8320c420c84"
+        },
+        {
+          "source_id": "cfpb-bank-account-overdraft",
+          "document_id": "cfpb-bank-account-overdraft:dd62aae82cd9bfce",
+          "chunk_id": "cfpb-bank-account-overdraft:dd62aae82cd9bfce:0:dd62aae82cd9"
+        },
+        {
+          "source_id": "cfpb-mortgage-closing-disclosure",
+          "document_id": "cfpb-mortgage-closing-disclosure:c439f57258e3c577",
+          "chunk_id": "cfpb-mortgage-closing-disclosure:c439f57258e3c577:0:c439f57258e3"
+        }
+      ],
+      "hit_at_k": true,
+      "recall_at_k": 1.0,
+      "reciprocal_rank": 1.0,
+      "expected_rank": 1,
+      "final_context_count": 5,
+      "scenario": null,
+      "category": "credit reporting"
+    },
+    {
+      "case_id": "reports-006",
+      "generation": 4,
+      "qdrant_collection": "consumer_finance_managed_g000004",
+      "identity_kind": "chunk_id",
+      "expected_ids": [
+        "cfpb-credit-report-errors:7c6f2a7acdac76c5:0:7c6f2a7acdac"
+      ],
+      "expected_access": true,
+      "access_expectation_met": true,
+      "retrieved_identities": [
+        {
+          "source_id": "cfpb-credit-report-errors",
+          "document_id": "cfpb-credit-report-errors:7c6f2a7acdac76c5",
+          "chunk_id": "cfpb-credit-report-errors:7c6f2a7acdac76c5:0:7c6f2a7acdac"
+        },
+        {
+          "source_id": "cfpb-debt-validation",
+          "document_id": "cfpb-debt-validation:c8320c420c8460c4",
+          "chunk_id": "cfpb-debt-validation:c8320c420c8460c4:0:c8320c420c84"
+        },
+        {
+          "source_id": "cfpb-mortgage-closing-disclosure",
+          "document_id": "cfpb-mortgage-closing-disclosure:c439f57258e3c577",
+          "chunk_id": "cfpb-mortgage-closing-disclosure:c439f57258e3c577:0:c439f57258e3"
+        },
+        {
+          "source_id": "cfpb-payment-fraud",
+          "document_id": "cfpb-payment-fraud:b0e536079a0af82d",
+          "chunk_id": "cfpb-payment-fraud:b0e536079a0af82d:0:b0e536079a0a"
+        },
+        {
+          "source_id": "cfpb-bank-account-overdraft",
+          "document_id": "cfpb-bank-account-overdraft:dd62aae82cd9bfce",
+          "chunk_id": "cfpb-bank-account-overdraft:dd62aae82cd9bfce:0:dd62aae82cd9"
+        }
+      ],
+      "hit_at_k": true,
+      "recall_at_k": 1.0,
+      "reciprocal_rank": 1.0,
+      "expected_rank": 1,
+      "final_context_count": 5,
+      "scenario": null,
+      "category": "credit reporting"
+    },
+    {
+      "case_id": "mortgages-001",
+      "generation": 4,
+      "qdrant_collection": "consumer_finance_managed_g000004",
+      "identity_kind": "chunk_id",
+      "expected_ids": [
+        "cfpb-mortgage-closing-disclosure:c439f57258e3c577:0:c439f57258e3"
+      ],
+      "expected_access": true,
+      "access_expectation_met": true,
+      "retrieved_identities": [
+        {
+          "source_id": "cfpb-mortgage-closing-disclosure",
+          "document_id": "cfpb-mortgage-closing-disclosure:c439f57258e3c577",
+          "chunk_id": "cfpb-mortgage-closing-disclosure:c439f57258e3c577:0:c439f57258e3"
+        },
+        {
+          "source_id": "cfpb-bank-account-overdraft",
+          "document_id": "cfpb-bank-account-overdraft:dd62aae82cd9bfce",
+          "chunk_id": "cfpb-bank-account-overdraft:dd62aae82cd9bfce:0:dd62aae82cd9"
+        },
+        {
+          "source_id": "cfpb-debt-validation",
+          "document_id": "cfpb-debt-validation:c8320c420c8460c4",
+          "chunk_id": "cfpb-debt-validation:c8320c420c8460c4:0:c8320c420c84"
+        },
+        {
+          "source_id": "cfpb-credit-card-terms",
+          "document_id": "cfpb-credit-card-terms:91fe25c3855fcedf",
+          "chunk_id": "cfpb-credit-card-terms:91fe25c3855fcedf:0:91fe25c3855f"
+        },
+        {
+          "source_id": "cfpb-credit-report-errors",
+          "document_id": "cfpb-credit-report-errors:7c6f2a7acdac76c5",
+          "chunk_id": "cfpb-credit-report-errors:7c6f2a7acdac76c5:0:7c6f2a7acdac"
+        }
+      ],
+      "hit_at_k": true,
+      "recall_at_k": 1.0,
+      "reciprocal_rank": 1.0,
+      "expected_rank": 1,
+      "final_context_count": 5,
+      "scenario": null,
+      "category": "mortgages"
+    },
+    {
+      "case_id": "mortgages-002",
+      "generation": 4,
+      "qdrant_collection": "consumer_finance_managed_g000004",
+      "identity_kind": "chunk_id",
+      "expected_ids": [
+        "cfpb-mortgage-closing-disclosure:c439f57258e3c577:0:c439f57258e3"
+      ],
+      "expected_access": true,
+      "access_expectation_met": true,
+      "retrieved_identities": [
+        {
+          "source_id": "cfpb-mortgage-closing-disclosure",
+          "document_id": "cfpb-mortgage-closing-disclosure:c439f57258e3c577",
+          "chunk_id": "cfpb-mortgage-closing-disclosure:c439f57258e3c577:0:c439f57258e3"
+        },
+        {
+          "source_id": "cfpb-debt-validation",
+          "document_id": "cfpb-debt-validation:c8320c420c8460c4",
+          "chunk_id": "cfpb-debt-validation:c8320c420c8460c4:0:c8320c420c84"
+        },
+        {
+          "source_id": "cfpb-bank-account-overdraft",
+          "document_id": "cfpb-bank-account-overdraft:dd62aae82cd9bfce",
+          "chunk_id": "cfpb-bank-account-overdraft:dd62aae82cd9bfce:0:dd62aae82cd9"
+        },
+        {
+          "source_id": "cfpb-payment-fraud",
+          "document_id": "cfpb-payment-fraud:b0e536079a0af82d",
+          "chunk_id": "cfpb-payment-fraud:b0e536079a0af82d:0:b0e536079a0a"
+        },
+        {
+          "source_id": "cfpb-credit-report-errors",
+          "document_id": "cfpb-credit-report-errors:7c6f2a7acdac76c5",
+          "chunk_id": "cfpb-credit-report-errors:7c6f2a7acdac76c5:0:7c6f2a7acdac"
+        }
+      ],
+      "hit_at_k": true,
+      "recall_at_k": 1.0,
+      "reciprocal_rank": 1.0,
+      "expected_rank": 1,
+      "final_context_count": 5,
+      "scenario": null,
+      "category": "mortgages"
+    },
+    {
+      "case_id": "mortgages-003",
+      "generation": 4,
+      "qdrant_collection": "consumer_finance_managed_g000004",
+      "identity_kind": "chunk_id",
+      "expected_ids": [
+        "cfpb-mortgage-closing-disclosure:c439f57258e3c577:0:c439f57258e3"
+      ],
+      "expected_access": true,
+      "access_expectation_met": true,
+      "retrieved_identities": [
+        {
+          "source_id": "cfpb-mortgage-closing-disclosure",
+          "document_id": "cfpb-mortgage-closing-disclosure:c439f57258e3c577",
+          "chunk_id": "cfpb-mortgage-closing-disclosure:c439f57258e3c577:0:c439f57258e3"
+        },
+        {
+          "source_id": "cfpb-credit-card-terms",
+          "document_id": "cfpb-credit-card-terms:91fe25c3855fcedf",
+          "chunk_id": "cfpb-credit-card-terms:91fe25c3855fcedf:0:91fe25c3855f"
+        },
+        {
+          "source_id": "cfpb-bank-account-overdraft",
+          "document_id": "cfpb-bank-account-overdraft:dd62aae82cd9bfce",
+          "chunk_id": "cfpb-bank-account-overdraft:dd62aae82cd9bfce:0:dd62aae82cd9"
+        },
+        {
+          "source_id": "cfpb-debt-validation",
+          "document_id": "cfpb-debt-validation:c8320c420c8460c4",
+          "chunk_id": "cfpb-debt-validation:c8320c420c8460c4:0:c8320c420c84"
+        },
+        {
+          "source_id": "cfpb-payment-fraud",
+          "document_id": "cfpb-payment-fraud:b0e536079a0af82d",
+          "chunk_id": "cfpb-payment-fraud:b0e536079a0af82d:0:b0e536079a0a"
+        }
+      ],
+      "hit_at_k": true,
+      "recall_at_k": 1.0,
+      "reciprocal_rank": 1.0,
+      "expected_rank": 1,
+      "final_context_count": 5,
+      "scenario": null,
+      "category": "mortgages"
+    },
+    {
+      "case_id": "mortgages-004",
+      "generation": 4,
+      "qdrant_collection": "consumer_finance_managed_g000004",
+      "identity_kind": "chunk_id",
+      "expected_ids": [
+        "cfpb-mortgage-closing-disclosure:c439f57258e3c577:0:c439f57258e3"
+      ],
+      "expected_access": true,
+      "access_expectation_met": true,
+      "retrieved_identities": [
+        {
+          "source_id": "cfpb-mortgage-closing-disclosure",
+          "document_id": "cfpb-mortgage-closing-disclosure:c439f57258e3c577",
+          "chunk_id": "cfpb-mortgage-closing-disclosure:c439f57258e3c577:0:c439f57258e3"
+        },
+        {
+          "source_id": "cfpb-debt-validation",
+          "document_id": "cfpb-debt-validation:c8320c420c8460c4",
+          "chunk_id": "cfpb-debt-validation:c8320c420c8460c4:0:c8320c420c84"
+        },
+        {
+          "source_id": "cfpb-credit-card-terms",
+          "document_id": "cfpb-credit-card-terms:91fe25c3855fcedf",
+          "chunk_id": "cfpb-credit-card-terms:91fe25c3855fcedf:0:91fe25c3855f"
+        },
+        {
+          "source_id": "cfpb-bank-account-overdraft",
+          "document_id": "cfpb-bank-account-overdraft:dd62aae82cd9bfce",
+          "chunk_id": "cfpb-bank-account-overdraft:dd62aae82cd9bfce:0:dd62aae82cd9"
+        },
+        {
+          "source_id": "cfpb-payment-fraud",
+          "document_id": "cfpb-payment-fraud:b0e536079a0af82d",
+          "chunk_id": "cfpb-payment-fraud:b0e536079a0af82d:0:b0e536079a0a"
+        }
+      ],
+      "hit_at_k": true,
+      "recall_at_k": 1.0,
+      "reciprocal_rank": 1.0,
+      "expected_rank": 1,
+      "final_context_count": 5,
+      "scenario": null,
+      "category": "mortgages"
+    },
+    {
+      "case_id": "mortgages-005",
+      "generation": 4,
+      "qdrant_collection": "consumer_finance_managed_g000004",
+      "identity_kind": "chunk_id",
+      "expected_ids": [
+        "cfpb-mortgage-closing-disclosure:c439f57258e3c577:0:c439f57258e3"
+      ],
+      "expected_access": true,
+      "access_expectation_met": true,
+      "retrieved_identities": [
+        {
+          "source_id": "cfpb-mortgage-closing-disclosure",
+          "document_id": "cfpb-mortgage-closing-disclosure:c439f57258e3c577",
+          "chunk_id": "cfpb-mortgage-closing-disclosure:c439f57258e3c577:0:c439f57258e3"
+        },
+        {
+          "source_id": "cfpb-credit-card-terms",
+          "document_id": "cfpb-credit-card-terms:91fe25c3855fcedf",
+          "chunk_id": "cfpb-credit-card-terms:91fe25c3855fcedf:0:91fe25c3855f"
+        },
+        {
+          "source_id": "cfpb-debt-validation",
+          "document_id": "cfpb-debt-validation:c8320c420c8460c4",
+          "chunk_id": "cfpb-debt-validation:c8320c420c8460c4:0:c8320c420c84"
+        },
+        {
+          "source_id": "cfpb-payment-fraud",
+          "document_id": "cfpb-payment-fraud:b0e536079a0af82d",
+          "chunk_id": "cfpb-payment-fraud:b0e536079a0af82d:0:b0e536079a0a"
+        },
+        {
+          "source_id": "cfpb-bank-account-overdraft",
+          "document_id": "cfpb-bank-account-overdraft:dd62aae82cd9bfce",
+          "chunk_id": "cfpb-bank-account-overdraft:dd62aae82cd9bfce:0:dd62aae82cd9"
+        }
+      ],
+      "hit_at_k": true,
+      "recall_at_k": 1.0,
+      "reciprocal_rank": 1.0,
+      "expected_rank": 1,
+      "final_context_count": 5,
+      "scenario": null,
+      "category": "mortgages"
+    },
+    {
+      "case_id": "mortgages-006",
+      "generation": 4,
+      "qdrant_collection": "consumer_finance_managed_g000004",
+      "identity_kind": "chunk_id",
+      "expected_ids": [
+        "cfpb-mortgage-closing-disclosure:c439f57258e3c577:0:c439f57258e3"
+      ],
+      "expected_access": true,
+      "access_expectation_met": true,
+      "retrieved_identities": [
+        {
+          "source_id": "cfpb-mortgage-closing-disclosure",
+          "document_id": "cfpb-mortgage-closing-disclosure:c439f57258e3c577",
+          "chunk_id": "cfpb-mortgage-closing-disclosure:c439f57258e3c577:0:c439f57258e3"
+        },
+        {
+          "source_id": "cfpb-bank-account-overdraft",
+          "document_id": "cfpb-bank-account-overdraft:dd62aae82cd9bfce",
+          "chunk_id": "cfpb-bank-account-overdraft:dd62aae82cd9bfce:0:dd62aae82cd9"
+        },
+        {
+          "source_id": "cfpb-credit-card-terms",
+          "document_id": "cfpb-credit-card-terms:91fe25c3855fcedf",
+          "chunk_id": "cfpb-credit-card-terms:91fe25c3855fcedf:0:91fe25c3855f"
+        },
+        {
+          "source_id": "cfpb-payment-fraud",
+          "document_id": "cfpb-payment-fraud:b0e536079a0af82d",
+          "chunk_id": "cfpb-payment-fraud:b0e536079a0af82d:0:b0e536079a0a"
+        },
+        {
+          "source_id": "cfpb-debt-validation",
+          "document_id": "cfpb-debt-validation:c8320c420c8460c4",
+          "chunk_id": "cfpb-debt-validation:c8320c420c8460c4:0:c8320c420c84"
+        }
+      ],
+      "hit_at_k": true,
+      "recall_at_k": 1.0,
+      "reciprocal_rank": 1.0,
+      "expected_rank": 1,
+      "final_context_count": 5,
+      "scenario": null,
+      "category": "mortgages"
+    },
+    {
+      "case_id": "accounts-001",
+      "generation": 4,
+      "qdrant_collection": "consumer_finance_managed_g000004",
+      "identity_kind": "chunk_id",
+      "expected_ids": [
+        "cfpb-bank-account-overdraft:dd62aae82cd9bfce:0:dd62aae82cd9"
+      ],
+      "expected_access": true,
+      "access_expectation_met": true,
+      "retrieved_identities": [
+        {
+          "source_id": "cfpb-bank-account-overdraft",
+          "document_id": "cfpb-bank-account-overdraft:dd62aae82cd9bfce",
+          "chunk_id": "cfpb-bank-account-overdraft:dd62aae82cd9bfce:0:dd62aae82cd9"
+        },
+        {
+          "source_id": "cfpb-credit-card-terms",
+          "document_id": "cfpb-credit-card-terms:91fe25c3855fcedf",
+          "chunk_id": "cfpb-credit-card-terms:91fe25c3855fcedf:0:91fe25c3855f"
+        },
+        {
+          "source_id": "cfpb-debt-validation",
+          "document_id": "cfpb-debt-validation:c8320c420c8460c4",
+          "chunk_id": "cfpb-debt-validation:c8320c420c8460c4:0:c8320c420c84"
+        },
+        {
+          "source_id": "cfpb-payment-fraud",
+          "document_id": "cfpb-payment-fraud:b0e536079a0af82d",
+          "chunk_id": "cfpb-payment-fraud:b0e536079a0af82d:0:b0e536079a0a"
+        },
+        {
+          "source_id": "cfpb-mortgage-closing-disclosure",
+          "document_id": "cfpb-mortgage-closing-disclosure:c439f57258e3c577",
+          "chunk_id": "cfpb-mortgage-closing-disclosure:c439f57258e3c577:0:c439f57258e3"
+        }
+      ],
+      "hit_at_k": true,
+      "recall_at_k": 1.0,
+      "reciprocal_rank": 1.0,
+      "expected_rank": 1,
+      "final_context_count": 5,
+      "scenario": null,
+      "category": "bank accounts"
+    },
+    {
+      "case_id": "accounts-002",
+      "generation": 4,
+      "qdrant_collection": "consumer_finance_managed_g000004",
+      "identity_kind": "chunk_id",
+      "expected_ids": [
+        "cfpb-bank-account-overdraft:dd62aae82cd9bfce:0:dd62aae82cd9"
+      ],
+      "expected_access": true,
+      "access_expectation_met": true,
+      "retrieved_identities": [
+        {
+          "source_id": "cfpb-bank-account-overdraft",
+          "document_id": "cfpb-bank-account-overdraft:dd62aae82cd9bfce",
+          "chunk_id": "cfpb-bank-account-overdraft:dd62aae82cd9bfce:0:dd62aae82cd9"
+        },
+        {
+          "source_id": "cfpb-credit-card-terms",
+          "document_id": "cfpb-credit-card-terms:91fe25c3855fcedf",
+          "chunk_id": "cfpb-credit-card-terms:91fe25c3855fcedf:0:91fe25c3855f"
+        },
+        {
+          "source_id": "cfpb-debt-validation",
+          "document_id": "cfpb-debt-validation:c8320c420c8460c4",
+          "chunk_id": "cfpb-debt-validation:c8320c420c8460c4:0:c8320c420c84"
+        },
+        {
+          "source_id": "cfpb-payment-fraud",
+          "document_id": "cfpb-payment-fraud:b0e536079a0af82d",
+          "chunk_id": "cfpb-payment-fraud:b0e536079a0af82d:0:b0e536079a0a"
+        },
+        {
+          "source_id": "cfpb-mortgage-closing-disclosure",
+          "document_id": "cfpb-mortgage-closing-disclosure:c439f57258e3c577",
+          "chunk_id": "cfpb-mortgage-closing-disclosure:c439f57258e3c577:0:c439f57258e3"
+        }
+      ],
+      "hit_at_k": true,
+      "recall_at_k": 1.0,
+      "reciprocal_rank": 1.0,
+      "expected_rank": 1,
+      "final_context_count": 5,
+      "scenario": null,
+      "category": "bank accounts"
+    },
+    {
+      "case_id": "accounts-003",
+      "generation": 4,
+      "qdrant_collection": "consumer_finance_managed_g000004",
+      "identity_kind": "chunk_id",
+      "expected_ids": [
+        "cfpb-bank-account-overdraft:dd62aae82cd9bfce:0:dd62aae82cd9"
+      ],
+      "expected_access": true,
+      "access_expectation_met": true,
+      "retrieved_identities": [
+        {
+          "source_id": "cfpb-bank-account-overdraft",
+          "document_id": "cfpb-bank-account-overdraft:dd62aae82cd9bfce",
+          "chunk_id": "cfpb-bank-account-overdraft:dd62aae82cd9bfce:0:dd62aae82cd9"
+        },
+        {
+          "source_id": "cfpb-credit-card-terms",
+          "document_id": "cfpb-credit-card-terms:91fe25c3855fcedf",
+          "chunk_id": "cfpb-credit-card-terms:91fe25c3855fcedf:0:91fe25c3855f"
+        },
+        {
+          "source_id": "cfpb-payment-fraud",
+          "document_id": "cfpb-payment-fraud:b0e536079a0af82d",
+          "chunk_id": "cfpb-payment-fraud:b0e536079a0af82d:0:b0e536079a0a"
+        },
+        {
+          "source_id": "cfpb-mortgage-closing-disclosure",
+          "document_id": "cfpb-mortgage-closing-disclosure:c439f57258e3c577",
+          "chunk_id": "cfpb-mortgage-closing-disclosure:c439f57258e3c577:0:c439f57258e3"
+        },
+        {
+          "source_id": "cfpb-credit-report-errors",
+          "document_id": "cfpb-credit-report-errors:7c6f2a7acdac76c5",
+          "chunk_id": "cfpb-credit-report-errors:7c6f2a7acdac76c5:0:7c6f2a7acdac"
+        }
+      ],
+      "hit_at_k": true,
+      "recall_at_k": 1.0,
+      "reciprocal_rank": 1.0,
+      "expected_rank": 1,
+      "final_context_count": 5,
+      "scenario": null,
+      "category": "bank accounts"
+    },
+    {
+      "case_id": "accounts-004",
+      "generation": 4,
+      "qdrant_collection": "consumer_finance_managed_g000004",
+      "identity_kind": "chunk_id",
+      "expected_ids": [
+        "cfpb-bank-account-overdraft:dd62aae82cd9bfce:0:dd62aae82cd9"
+      ],
+      "expected_access": true,
+      "access_expectation_met": true,
+      "retrieved_identities": [
+        {
+          "source_id": "cfpb-bank-account-overdraft",
+          "document_id": "cfpb-bank-account-overdraft:dd62aae82cd9bfce",
+          "chunk_id": "cfpb-bank-account-overdraft:dd62aae82cd9bfce:0:dd62aae82cd9"
+        },
+        {
+          "source_id": "cfpb-credit-card-terms",
+          "document_id": "cfpb-credit-card-terms:91fe25c3855fcedf",
+          "chunk_id": "cfpb-credit-card-terms:91fe25c3855fcedf:0:91fe25c3855f"
+        },
+        {
+          "source_id": "cfpb-payment-fraud",
+          "document_id": "cfpb-payment-fraud:b0e536079a0af82d",
+          "chunk_id": "cfpb-payment-fraud:b0e536079a0af82d:0:b0e536079a0a"
+        },
+        {
+          "source_id": "cfpb-mortgage-closing-disclosure",
+          "document_id": "cfpb-mortgage-closing-disclosure:c439f57258e3c577",
+          "chunk_id": "cfpb-mortgage-closing-disclosure:c439f57258e3c577:0:c439f57258e3"
+        },
+        {
+          "source_id": "cfpb-debt-validation",
+          "document_id": "cfpb-debt-validation:c8320c420c8460c4",
+          "chunk_id": "cfpb-debt-validation:c8320c420c8460c4:0:c8320c420c84"
+        }
+      ],
+      "hit_at_k": true,
+      "recall_at_k": 1.0,
+      "reciprocal_rank": 1.0,
+      "expected_rank": 1,
+      "final_context_count": 5,
+      "scenario": null,
+      "category": "bank accounts"
+    },
+    {
+      "case_id": "accounts-005",
+      "generation": 4,
+      "qdrant_collection": "consumer_finance_managed_g000004",
+      "identity_kind": "chunk_id",
+      "expected_ids": [
+        "cfpb-bank-account-overdraft:dd62aae82cd9bfce:0:dd62aae82cd9"
+      ],
+      "expected_access": true,
+      "access_expectation_met": true,
+      "retrieved_identities": [
+        {
+          "source_id": "cfpb-bank-account-overdraft",
+          "document_id": "cfpb-bank-account-overdraft:dd62aae82cd9bfce",
+          "chunk_id": "cfpb-bank-account-overdraft:dd62aae82cd9bfce:0:dd62aae82cd9"
+        },
+        {
+          "source_id": "cfpb-payment-fraud",
+          "document_id": "cfpb-payment-fraud:b0e536079a0af82d",
+          "chunk_id": "cfpb-payment-fraud:b0e536079a0af82d:0:b0e536079a0a"
+        },
+        {
+          "source_id": "cfpb-credit-card-terms",
+          "document_id": "cfpb-credit-card-terms:91fe25c3855fcedf",
+          "chunk_id": "cfpb-credit-card-terms:91fe25c3855fcedf:0:91fe25c3855f"
+        },
+        {
+          "source_id": "cfpb-credit-report-errors",
+          "document_id": "cfpb-credit-report-errors:7c6f2a7acdac76c5",
+          "chunk_id": "cfpb-credit-report-errors:7c6f2a7acdac76c5:0:7c6f2a7acdac"
+        },
+        {
+          "source_id": "cfpb-debt-validation",
+          "document_id": "cfpb-debt-validation:c8320c420c8460c4",
+          "chunk_id": "cfpb-debt-validation:c8320c420c8460c4:0:c8320c420c84"
+        }
+      ],
+      "hit_at_k": true,
+      "recall_at_k": 1.0,
+      "reciprocal_rank": 1.0,
+      "expected_rank": 1,
+      "final_context_count": 5,
+      "scenario": null,
+      "category": "bank accounts"
+    },
+    {
+      "case_id": "accounts-006",
+      "generation": 4,
+      "qdrant_collection": "consumer_finance_managed_g000004",
+      "identity_kind": "chunk_id",
+      "expected_ids": [
+        "cfpb-bank-account-overdraft:dd62aae82cd9bfce:0:dd62aae82cd9"
+      ],
+      "expected_access": true,
+      "access_expectation_met": true,
+      "retrieved_identities": [
+        {
+          "source_id": "cfpb-bank-account-overdraft",
+          "document_id": "cfpb-bank-account-overdraft:dd62aae82cd9bfce",
+          "chunk_id": "cfpb-bank-account-overdraft:dd62aae82cd9bfce:0:dd62aae82cd9"
+        },
+        {
+          "source_id": "cfpb-payment-fraud",
+          "document_id": "cfpb-payment-fraud:b0e536079a0af82d",
+          "chunk_id": "cfpb-payment-fraud:b0e536079a0af82d:0:b0e536079a0a"
+        },
+        {
+          "source_id": "cfpb-credit-card-terms",
+          "document_id": "cfpb-credit-card-terms:91fe25c3855fcedf",
+          "chunk_id": "cfpb-credit-card-terms:91fe25c3855fcedf:0:91fe25c3855f"
+        },
+        {
+          "source_id": "cfpb-credit-report-errors",
+          "document_id": "cfpb-credit-report-errors:7c6f2a7acdac76c5",
+          "chunk_id": "cfpb-credit-report-errors:7c6f2a7acdac76c5:0:7c6f2a7acdac"
+        },
+        {
+          "source_id": "cfpb-mortgage-closing-disclosure",
+          "document_id": "cfpb-mortgage-closing-disclosure:c439f57258e3c577",
+          "chunk_id": "cfpb-mortgage-closing-disclosure:c439f57258e3c577:0:c439f57258e3"
+        }
+      ],
+      "hit_at_k": true,
+      "recall_at_k": 1.0,
+      "reciprocal_rank": 1.0,
+      "expected_rank": 1,
+      "final_context_count": 5,
+      "scenario": null,
+      "category": "bank accounts"
+    },
+    {
+      "case_id": "debt-001",
+      "generation": 4,
+      "qdrant_collection": "consumer_finance_managed_g000004",
+      "identity_kind": "chunk_id",
+      "expected_ids": [
+        "cfpb-debt-validation:c8320c420c8460c4:0:c8320c420c84"
+      ],
+      "expected_access": true,
+      "access_expectation_met": true,
+      "retrieved_identities": [
+        {
+          "source_id": "cfpb-debt-validation",
+          "document_id": "cfpb-debt-validation:c8320c420c8460c4",
+          "chunk_id": "cfpb-debt-validation:c8320c420c8460c4:0:c8320c420c84"
+        },
+        {
+          "source_id": "cfpb-credit-report-errors",
+          "document_id": "cfpb-credit-report-errors:7c6f2a7acdac76c5",
+          "chunk_id": "cfpb-credit-report-errors:7c6f2a7acdac76c5:0:7c6f2a7acdac"
+        },
+        {
+          "source_id": "cfpb-mortgage-closing-disclosure",
+          "document_id": "cfpb-mortgage-closing-disclosure:c439f57258e3c577",
+          "chunk_id": "cfpb-mortgage-closing-disclosure:c439f57258e3c577:0:c439f57258e3"
+        },
+        {
+          "source_id": "cfpb-bank-account-overdraft",
+          "document_id": "cfpb-bank-account-overdraft:dd62aae82cd9bfce",
+          "chunk_id": "cfpb-bank-account-overdraft:dd62aae82cd9bfce:0:dd62aae82cd9"
+        },
+        {
+          "source_id": "cfpb-payment-fraud",
+          "document_id": "cfpb-payment-fraud:b0e536079a0af82d",
+          "chunk_id": "cfpb-payment-fraud:b0e536079a0af82d:0:b0e536079a0a"
+        }
+      ],
+      "hit_at_k": true,
+      "recall_at_k": 1.0,
+      "reciprocal_rank": 1.0,
+      "expected_rank": 1,
+      "final_context_count": 5,
+      "scenario": null,
+      "category": "debt collection"
+    },
+    {
+      "case_id": "debt-002",
+      "generation": 4,
+      "qdrant_collection": "consumer_finance_managed_g000004",
+      "identity_kind": "chunk_id",
+      "expected_ids": [
+        "cfpb-debt-validation:c8320c420c8460c4:0:c8320c420c84"
+      ],
+      "expected_access": true,
+      "access_expectation_met": true,
+      "retrieved_identities": [
+        {
+          "source_id": "cfpb-debt-validation",
+          "document_id": "cfpb-debt-validation:c8320c420c8460c4",
+          "chunk_id": "cfpb-debt-validation:c8320c420c8460c4:0:c8320c420c84"
+        },
+        {
+          "source_id": "cfpb-credit-report-errors",
+          "document_id": "cfpb-credit-report-errors:7c6f2a7acdac76c5",
+          "chunk_id": "cfpb-credit-report-errors:7c6f2a7acdac76c5:0:7c6f2a7acdac"
+        },
+        {
+          "source_id": "cfpb-mortgage-closing-disclosure",
+          "document_id": "cfpb-mortgage-closing-disclosure:c439f57258e3c577",
+          "chunk_id": "cfpb-mortgage-closing-disclosure:c439f57258e3c577:0:c439f57258e3"
+        },
+        {
+          "source_id": "cfpb-payment-fraud",
+          "document_id": "cfpb-payment-fraud:b0e536079a0af82d",
+          "chunk_id": "cfpb-payment-fraud:b0e536079a0af82d:0:b0e536079a0a"
+        },
+        {
+          "source_id": "cfpb-bank-account-overdraft",
+          "document_id": "cfpb-bank-account-overdraft:dd62aae82cd9bfce",
+          "chunk_id": "cfpb-bank-account-overdraft:dd62aae82cd9bfce:0:dd62aae82cd9"
+        }
+      ],
+      "hit_at_k": true,
+      "recall_at_k": 1.0,
+      "reciprocal_rank": 1.0,
+      "expected_rank": 1,
+      "final_context_count": 5,
+      "scenario": null,
+      "category": "debt collection"
+    },
+    {
+      "case_id": "debt-003",
+      "generation": 4,
+      "qdrant_collection": "consumer_finance_managed_g000004",
+      "identity_kind": "chunk_id",
+      "expected_ids": [
+        "cfpb-debt-validation:c8320c420c8460c4:0:c8320c420c84"
+      ],
+      "expected_access": true,
+      "access_expectation_met": true,
+      "retrieved_identities": [
+        {
+          "source_id": "cfpb-debt-validation",
+          "document_id": "cfpb-debt-validation:c8320c420c8460c4",
+          "chunk_id": "cfpb-debt-validation:c8320c420c8460c4:0:c8320c420c84"
+        },
+        {
+          "source_id": "cfpb-mortgage-closing-disclosure",
+          "document_id": "cfpb-mortgage-closing-disclosure:c439f57258e3c577",
+          "chunk_id": "cfpb-mortgage-closing-disclosure:c439f57258e3c577:0:c439f57258e3"
+        },
+        {
+          "source_id": "cfpb-credit-report-errors",
+          "document_id": "cfpb-credit-report-errors:7c6f2a7acdac76c5",
+          "chunk_id": "cfpb-credit-report-errors:7c6f2a7acdac76c5:0:7c6f2a7acdac"
+        },
+        {
+          "source_id": "cfpb-bank-account-overdraft",
+          "document_id": "cfpb-bank-account-overdraft:dd62aae82cd9bfce",
+          "chunk_id": "cfpb-bank-account-overdraft:dd62aae82cd9bfce:0:dd62aae82cd9"
+        },
+        {
+          "source_id": "cfpb-payment-fraud",
+          "document_id": "cfpb-payment-fraud:b0e536079a0af82d",
+          "chunk_id": "cfpb-payment-fraud:b0e536079a0af82d:0:b0e536079a0a"
+        }
+      ],
+      "hit_at_k": true,
+      "recall_at_k": 1.0,
+      "reciprocal_rank": 1.0,
+      "expected_rank": 1,
+      "final_context_count": 5,
+      "scenario": null,
+      "category": "debt collection"
+    },
+    {
+      "case_id": "debt-004",
+      "generation": 4,
+      "qdrant_collection": "consumer_finance_managed_g000004",
+      "identity_kind": "chunk_id",
+      "expected_ids": [
+        "cfpb-debt-validation:c8320c420c8460c4:0:c8320c420c84"
+      ],
+      "expected_access": true,
+      "access_expectation_met": true,
+      "retrieved_identities": [
+        {
+          "source_id": "cfpb-debt-validation",
+          "document_id": "cfpb-debt-validation:c8320c420c8460c4",
+          "chunk_id": "cfpb-debt-validation:c8320c420c8460c4:0:c8320c420c84"
+        },
+        {
+          "source_id": "cfpb-credit-report-errors",
+          "document_id": "cfpb-credit-report-errors:7c6f2a7acdac76c5",
+          "chunk_id": "cfpb-credit-report-errors:7c6f2a7acdac76c5:0:7c6f2a7acdac"
+        },
+        {
+          "source_id": "cfpb-mortgage-closing-disclosure",
+          "document_id": "cfpb-mortgage-closing-disclosure:c439f57258e3c577",
+          "chunk_id": "cfpb-mortgage-closing-disclosure:c439f57258e3c577:0:c439f57258e3"
+        },
+        {
+          "source_id": "cfpb-payment-fraud",
+          "document_id": "cfpb-payment-fraud:b0e536079a0af82d",
+          "chunk_id": "cfpb-payment-fraud:b0e536079a0af82d:0:b0e536079a0a"
+        },
+        {
+          "source_id": "cfpb-bank-account-overdraft",
+          "document_id": "cfpb-bank-account-overdraft:dd62aae82cd9bfce",
+          "chunk_id": "cfpb-bank-account-overdraft:dd62aae82cd9bfce:0:dd62aae82cd9"
+        }
+      ],
+      "hit_at_k": true,
+      "recall_at_k": 1.0,
+      "reciprocal_rank": 1.0,
+      "expected_rank": 1,
+      "final_context_count": 5,
+      "scenario": null,
+      "category": "debt collection"
+    },
+    {
+      "case_id": "debt-005",
+      "generation": 4,
+      "qdrant_collection": "consumer_finance_managed_g000004",
+      "identity_kind": "chunk_id",
+      "expected_ids": [
+        "cfpb-debt-validation:c8320c420c8460c4:0:c8320c420c84"
+      ],
+      "expected_access": true,
+      "access_expectation_met": true,
+      "retrieved_identities": [
+        {
+          "source_id": "cfpb-debt-validation",
+          "document_id": "cfpb-debt-validation:c8320c420c8460c4",
+          "chunk_id": "cfpb-debt-validation:c8320c420c8460c4:0:c8320c420c84"
+        },
+        {
+          "source_id": "cfpb-credit-report-errors",
+          "document_id": "cfpb-credit-report-errors:7c6f2a7acdac76c5",
+          "chunk_id": "cfpb-credit-report-errors:7c6f2a7acdac76c5:0:7c6f2a7acdac"
+        },
+        {
+          "source_id": "cfpb-mortgage-closing-disclosure",
+          "document_id": "cfpb-mortgage-closing-disclosure:c439f57258e3c577",
+          "chunk_id": "cfpb-mortgage-closing-disclosure:c439f57258e3c577:0:c439f57258e3"
+        },
+        {
+          "source_id": "cfpb-payment-fraud",
+          "document_id": "cfpb-payment-fraud:b0e536079a0af82d",
+          "chunk_id": "cfpb-payment-fraud:b0e536079a0af82d:0:b0e536079a0a"
+        },
+        {
+          "source_id": "cfpb-credit-card-terms",
+          "document_id": "cfpb-credit-card-terms:91fe25c3855fcedf",
+          "chunk_id": "cfpb-credit-card-terms:91fe25c3855fcedf:0:91fe25c3855f"
+        }
+      ],
+      "hit_at_k": true,
+      "recall_at_k": 1.0,
+      "reciprocal_rank": 1.0,
+      "expected_rank": 1,
+      "final_context_count": 5,
+      "scenario": null,
+      "category": "debt collection"
+    },
+    {
+      "case_id": "debt-006",
+      "generation": 4,
+      "qdrant_collection": "consumer_finance_managed_g000004",
+      "identity_kind": "chunk_id",
+      "expected_ids": [
+        "cfpb-debt-validation:c8320c420c8460c4:0:c8320c420c84"
+      ],
+      "expected_access": true,
+      "access_expectation_met": true,
+      "retrieved_identities": [
+        {
+          "source_id": "cfpb-debt-validation",
+          "document_id": "cfpb-debt-validation:c8320c420c8460c4",
+          "chunk_id": "cfpb-debt-validation:c8320c420c8460c4:0:c8320c420c84"
+        },
+        {
+          "source_id": "cfpb-credit-report-errors",
+          "document_id": "cfpb-credit-report-errors:7c6f2a7acdac76c5",
+          "chunk_id": "cfpb-credit-report-errors:7c6f2a7acdac76c5:0:7c6f2a7acdac"
+        },
+        {
+          "source_id": "cfpb-payment-fraud",
+          "document_id": "cfpb-payment-fraud:b0e536079a0af82d",
+          "chunk_id": "cfpb-payment-fraud:b0e536079a0af82d:0:b0e536079a0a"
+        },
+        {
+          "source_id": "cfpb-mortgage-closing-disclosure",
+          "document_id": "cfpb-mortgage-closing-disclosure:c439f57258e3c577",
+          "chunk_id": "cfpb-mortgage-closing-disclosure:c439f57258e3c577:0:c439f57258e3"
+        },
+        {
+          "source_id": "cfpb-credit-card-terms",
+          "document_id": "cfpb-credit-card-terms:91fe25c3855fcedf",
+          "chunk_id": "cfpb-credit-card-terms:91fe25c3855fcedf:0:91fe25c3855f"
+        }
+      ],
+      "hit_at_k": true,
+      "recall_at_k": 1.0,
+      "reciprocal_rank": 1.0,
+      "expected_rank": 1,
+      "final_context_count": 5,
+      "scenario": null,
+      "category": "debt collection"
+    },
+    {
+      "case_id": "fraud-001",
+      "generation": 4,
+      "qdrant_collection": "consumer_finance_managed_g000004",
+      "identity_kind": "chunk_id",
+      "expected_ids": [
+        "cfpb-payment-fraud:b0e536079a0af82d:0:b0e536079a0a"
+      ],
+      "expected_access": true,
+      "access_expectation_met": true,
+      "retrieved_identities": [
+        {
+          "source_id": "cfpb-payment-fraud",
+          "document_id": "cfpb-payment-fraud:b0e536079a0af82d",
+          "chunk_id": "cfpb-payment-fraud:b0e536079a0af82d:0:b0e536079a0a"
+        },
+        {
+          "source_id": "cfpb-bank-account-overdraft",
+          "document_id": "cfpb-bank-account-overdraft:dd62aae82cd9bfce",
+          "chunk_id": "cfpb-bank-account-overdraft:dd62aae82cd9bfce:0:dd62aae82cd9"
+        },
+        {
+          "source_id": "cfpb-credit-report-errors",
+          "document_id": "cfpb-credit-report-errors:7c6f2a7acdac76c5",
+          "chunk_id": "cfpb-credit-report-errors:7c6f2a7acdac76c5:0:7c6f2a7acdac"
+        },
+        {
+          "source_id": "cfpb-debt-validation",
+          "document_id": "cfpb-debt-validation:c8320c420c8460c4",
+          "chunk_id": "cfpb-debt-validation:c8320c420c8460c4:0:c8320c420c84"
+        },
+        {
+          "source_id": "cfpb-credit-card-terms",
+          "document_id": "cfpb-credit-card-terms:91fe25c3855fcedf",
+          "chunk_id": "cfpb-credit-card-terms:91fe25c3855fcedf:0:91fe25c3855f"
+        }
+      ],
+      "hit_at_k": true,
+      "recall_at_k": 1.0,
+      "reciprocal_rank": 1.0,
+      "expected_rank": 1,
+      "final_context_count": 5,
+      "scenario": null,
+      "category": "payments/fraud"
+    },
+    {
+      "case_id": "fraud-002",
+      "generation": 4,
+      "qdrant_collection": "consumer_finance_managed_g000004",
+      "identity_kind": "chunk_id",
+      "expected_ids": [
+        "cfpb-payment-fraud:b0e536079a0af82d:0:b0e536079a0a"
+      ],
+      "expected_access": true,
+      "access_expectation_met": true,
+      "retrieved_identities": [
+        {
+          "source_id": "cfpb-payment-fraud",
+          "document_id": "cfpb-payment-fraud:b0e536079a0af82d",
+          "chunk_id": "cfpb-payment-fraud:b0e536079a0af82d:0:b0e536079a0a"
+        },
+        {
+          "source_id": "cfpb-credit-report-errors",
+          "document_id": "cfpb-credit-report-errors:7c6f2a7acdac76c5",
+          "chunk_id": "cfpb-credit-report-errors:7c6f2a7acdac76c5:0:7c6f2a7acdac"
+        },
+        {
+          "source_id": "cfpb-debt-validation",
+          "document_id": "cfpb-debt-validation:c8320c420c8460c4",
+          "chunk_id": "cfpb-debt-validation:c8320c420c8460c4:0:c8320c420c84"
+        },
+        {
+          "source_id": "cfpb-bank-account-overdraft",
+          "document_id": "cfpb-bank-account-overdraft:dd62aae82cd9bfce",
+          "chunk_id": "cfpb-bank-account-overdraft:dd62aae82cd9bfce:0:dd62aae82cd9"
+        },
+        {
+          "source_id": "cfpb-mortgage-closing-disclosure",
+          "document_id": "cfpb-mortgage-closing-disclosure:c439f57258e3c577",
+          "chunk_id": "cfpb-mortgage-closing-disclosure:c439f57258e3c577:0:c439f57258e3"
+        }
+      ],
+      "hit_at_k": true,
+      "recall_at_k": 1.0,
+      "reciprocal_rank": 1.0,
+      "expected_rank": 1,
+      "final_context_count": 5,
+      "scenario": null,
+      "category": "payments/fraud"
+    },
+    {
+      "case_id": "fraud-003",
+      "generation": 4,
+      "qdrant_collection": "consumer_finance_managed_g000004",
+      "identity_kind": "chunk_id",
+      "expected_ids": [
+        "cfpb-payment-fraud:b0e536079a0af82d:0:b0e536079a0a"
+      ],
+      "expected_access": true,
+      "access_expectation_met": true,
+      "retrieved_identities": [
+        {
+          "source_id": "cfpb-payment-fraud",
+          "document_id": "cfpb-payment-fraud:b0e536079a0af82d",
+          "chunk_id": "cfpb-payment-fraud:b0e536079a0af82d:0:b0e536079a0a"
+        },
+        {
+          "source_id": "cfpb-debt-validation",
+          "document_id": "cfpb-debt-validation:c8320c420c8460c4",
+          "chunk_id": "cfpb-debt-validation:c8320c420c8460c4:0:c8320c420c84"
+        },
+        {
+          "source_id": "cfpb-credit-report-errors",
+          "document_id": "cfpb-credit-report-errors:7c6f2a7acdac76c5",
+          "chunk_id": "cfpb-credit-report-errors:7c6f2a7acdac76c5:0:7c6f2a7acdac"
+        },
+        {
+          "source_id": "cfpb-bank-account-overdraft",
+          "document_id": "cfpb-bank-account-overdraft:dd62aae82cd9bfce",
+          "chunk_id": "cfpb-bank-account-overdraft:dd62aae82cd9bfce:0:dd62aae82cd9"
+        },
+        {
+          "source_id": "cfpb-mortgage-closing-disclosure",
+          "document_id": "cfpb-mortgage-closing-disclosure:c439f57258e3c577",
+          "chunk_id": "cfpb-mortgage-closing-disclosure:c439f57258e3c577:0:c439f57258e3"
+        }
+      ],
+      "hit_at_k": true,
+      "recall_at_k": 1.0,
+      "reciprocal_rank": 1.0,
+      "expected_rank": 1,
+      "final_context_count": 5,
+      "scenario": null,
+      "category": "payments/fraud"
+    },
+    {
+      "case_id": "fraud-004",
+      "generation": 4,
+      "qdrant_collection": "consumer_finance_managed_g000004",
+      "identity_kind": "chunk_id",
+      "expected_ids": [
+        "cfpb-payment-fraud:b0e536079a0af82d:0:b0e536079a0a"
+      ],
+      "expected_access": true,
+      "access_expectation_met": true,
+      "retrieved_identities": [
+        {
+          "source_id": "cfpb-payment-fraud",
+          "document_id": "cfpb-payment-fraud:b0e536079a0af82d",
+          "chunk_id": "cfpb-payment-fraud:b0e536079a0af82d:0:b0e536079a0a"
+        },
+        {
+          "source_id": "cfpb-credit-report-errors",
+          "document_id": "cfpb-credit-report-errors:7c6f2a7acdac76c5",
+          "chunk_id": "cfpb-credit-report-errors:7c6f2a7acdac76c5:0:7c6f2a7acdac"
+        },
+        {
+          "source_id": "cfpb-debt-validation",
+          "document_id": "cfpb-debt-validation:c8320c420c8460c4",
+          "chunk_id": "cfpb-debt-validation:c8320c420c8460c4:0:c8320c420c84"
+        },
+        {
+          "source_id": "cfpb-mortgage-closing-disclosure",
+          "document_id": "cfpb-mortgage-closing-disclosure:c439f57258e3c577",
+          "chunk_id": "cfpb-mortgage-closing-disclosure:c439f57258e3c577:0:c439f57258e3"
+        },
+        {
+          "source_id": "cfpb-bank-account-overdraft",
+          "document_id": "cfpb-bank-account-overdraft:dd62aae82cd9bfce",
+          "chunk_id": "cfpb-bank-account-overdraft:dd62aae82cd9bfce:0:dd62aae82cd9"
+        }
+      ],
+      "hit_at_k": true,
+      "recall_at_k": 1.0,
+      "reciprocal_rank": 1.0,
+      "expected_rank": 1,
+      "final_context_count": 5,
+      "scenario": null,
+      "category": "payments/fraud"
+    },
+    {
+      "case_id": "fraud-005",
+      "generation": 4,
+      "qdrant_collection": "consumer_finance_managed_g000004",
+      "identity_kind": "chunk_id",
+      "expected_ids": [
+        "cfpb-payment-fraud:b0e536079a0af82d:0:b0e536079a0a"
+      ],
+      "expected_access": true,
+      "access_expectation_met": true,
+      "retrieved_identities": [
+        {
+          "source_id": "cfpb-payment-fraud",
+          "document_id": "cfpb-payment-fraud:b0e536079a0af82d",
+          "chunk_id": "cfpb-payment-fraud:b0e536079a0af82d:0:b0e536079a0a"
+        },
+        {
+          "source_id": "cfpb-credit-report-errors",
+          "document_id": "cfpb-credit-report-errors:7c6f2a7acdac76c5",
+          "chunk_id": "cfpb-credit-report-errors:7c6f2a7acdac76c5:0:7c6f2a7acdac"
+        },
+        {
+          "source_id": "cfpb-debt-validation",
+          "document_id": "cfpb-debt-validation:c8320c420c8460c4",
+          "chunk_id": "cfpb-debt-validation:c8320c420c8460c4:0:c8320c420c84"
+        },
+        {
+          "source_id": "cfpb-bank-account-overdraft",
+          "document_id": "cfpb-bank-account-overdraft:dd62aae82cd9bfce",
+          "chunk_id": "cfpb-bank-account-overdraft:dd62aae82cd9bfce:0:dd62aae82cd9"
+        },
+        {
+          "source_id": "cfpb-credit-card-terms",
+          "document_id": "cfpb-credit-card-terms:91fe25c3855fcedf",
+          "chunk_id": "cfpb-credit-card-terms:91fe25c3855fcedf:0:91fe25c3855f"
+        }
+      ],
+      "hit_at_k": true,
+      "recall_at_k": 1.0,
+      "reciprocal_rank": 1.0,
+      "expected_rank": 1,
+      "final_context_count": 5,
+      "scenario": null,
+      "category": "payments/fraud"
+    },
+    {
+      "case_id": "fraud-006",
+      "generation": 4,
+      "qdrant_collection": "consumer_finance_managed_g000004",
+      "identity_kind": "chunk_id",
+      "expected_ids": [
+        "cfpb-payment-fraud:b0e536079a0af82d:0:b0e536079a0a"
+      ],
+      "expected_access": true,
+      "access_expectation_met": true,
+      "retrieved_identities": [
+        {
+          "source_id": "cfpb-payment-fraud",
+          "document_id": "cfpb-payment-fraud:b0e536079a0af82d",
+          "chunk_id": "cfpb-payment-fraud:b0e536079a0af82d:0:b0e536079a0a"
+        },
+        {
+          "source_id": "cfpb-bank-account-overdraft",
+          "document_id": "cfpb-bank-account-overdraft:dd62aae82cd9bfce",
+          "chunk_id": "cfpb-bank-account-overdraft:dd62aae82cd9bfce:0:dd62aae82cd9"
+        },
+        {
+          "source_id": "cfpb-credit-report-errors",
+          "document_id": "cfpb-credit-report-errors:7c6f2a7acdac76c5",
+          "chunk_id": "cfpb-credit-report-errors:7c6f2a7acdac76c5:0:7c6f2a7acdac"
+        },
+        {
+          "source_id": "cfpb-credit-card-terms",
+          "document_id": "cfpb-credit-card-terms:91fe25c3855fcedf",
+          "chunk_id": "cfpb-credit-card-terms:91fe25c3855fcedf:0:91fe25c3855f"
+        },
+        {
+          "source_id": "cfpb-mortgage-closing-disclosure",
+          "document_id": "cfpb-mortgage-closing-disclosure:c439f57258e3c577",
+          "chunk_id": "cfpb-mortgage-closing-disclosure:c439f57258e3c577:0:c439f57258e3"
+        }
+      ],
+      "hit_at_k": true,
+      "recall_at_k": 1.0,
+      "reciprocal_rank": 1.0,
+      "expected_rank": 1,
+      "final_context_count": 5,
+      "scenario": null,
+      "category": "payments/fraud"
+    }
+  ]
+}
