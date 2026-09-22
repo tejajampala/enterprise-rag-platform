@@ -641,6 +641,52 @@ sparse, fused, and reranked lists for the same cases. It aggregates globally and
 difficulty. `evaluation/reporting.py` writes JSON summaries and per-case CSV rows that Streamlit
 can read and future CI can compare. No threshold or improvement claim is embedded.
 
+### Managed retrieval quality
+
+`retrieval_quality.py` adapts those Phase 2 cases and reuses their duplicate-safe Recall@K, hit
+rate, and reciprocal-rank formulas for a pinned managed runtime. It is a read-only evaluation
+layer around the existing retrieval operation; it does not create an evaluator-specific search
+path or contact PostgreSQL after runtime construction.
+
+```text
+ManagedRetrievalRuntime (generation pinned once)
+                         |
+                         v
+             golden evaluation cases
+                         |
+                         v
+               retrieval execution
+                         |
+                         v
+        deterministic quality metrics
+                         |
+                         v
+           RetrievalQualityReport
+                         |
+                         v
+             generation comparison
+```
+
+`RetrievalMetrics` remains safe per-request operational telemetry. A
+`RetrievalQualityReport` is instead an offline/controlled, versioned artifact containing the
+pinned generation, collection, index-state and build fingerprints, retrieval runtime settings,
+aggregate metrics, and identity-only case results. Queries, chunk text, arbitrary payloads,
+credentials, principals, and access-group names never enter the report. Scoring can use stable
+`source_id`, `document_id`, or `chunk_id`; REDACT-mode text therefore cannot change the score.
+
+Each case carries an in-memory `AccessContext` and an explicit expected-access value. Positive
+cases require the expected identity to be retrieved. Negative ACL cases succeed only when that
+identity remains inaccessible, so public and wrong-group cases are not mislabeled as retrieval
+misses. Neither the access context nor its group names are serialized.
+
+`compare_quality_reports()` requires the same cases and K, then reports objective Recall, MRR, and
+hit-rate deltas plus improved, regressed, unchanged, newly missed, and newly recovered case IDs.
+Explicit `max_recall_drop` and `max_mrr_drop` settings can produce a pure PASS/FAIL result for CI.
+They are runtime evaluation policy, not immutable index configuration, and have no publication,
+restoration, database, or Qdrant side effects. The first report format is
+`retrieval-quality-report-v1`; MLflow persistence and automatic deployment blocking remain
+deferred.
+
 ## MLflow GenAI and RAGAS
 
 `evaluation/mlflow_genai.py` is the only MLflow judge/dataset adapter. Judge construction calls
@@ -816,4 +862,5 @@ case list; it does not create an evaluator-specific retrieval implementation.
 Retrieved content remains untrusted prompt data. Traces avoid secrets and vectors. Boto3 uses
 standard credential resolution. Paid generation and judging require explicit commands/config.
 Authentication, identity-provider integration, semantic/LLM PII pipelines, production
-deployment, online evaluation, and formal regression gates remain future work.
+deployment, online evaluation, persisted regression policy, and automatic deployment gates remain
+future work.

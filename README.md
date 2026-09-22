@@ -104,6 +104,14 @@ that emits a JSON allowlist. Prometheus, OpenTelemetry, Datadog, CloudWatch, and
 backends are intentionally deferred; another sink can be injected later without changing the
 retrieval algorithm.
 
+Managed retrieval quality is measured separately with deterministic golden cases. `RetrievalMetrics`
+is operational telemetry for one request; `RetrievalQualityReport` is a controlled, offline report
+for one generation-pinned `ManagedRetrievalRuntime`. The report scores stable source, document, or
+chunk identity with Recall@K, hit rate, expected rank, and MRR. It includes generation/index
+fingerprints and retrieval settings, but excludes queries, context text, payload metadata,
+principals, and access-group names. Explicit ACL-negative cases pass when protected content stays
+inaccessible, and REDACT-mode text changes do not affect identity scoring.
+
 An MLflow **run** represents an evaluation experiment. It records model/config parameters,
 aggregate metrics, Git SHA, and report artifacts. Traces explain individual executions; runs make
 whole experiments comparable. PostgreSQL is the MLflow backend because MLflow Evaluation
@@ -417,6 +425,22 @@ records corpus counts, model/index/retrieval parameters, stage metrics, category
 breakdowns, and JSON/CSV artifacts. CLI overrides such as `--dense-candidates`,
 `--sparse-candidates`, `--fused-candidates`,
 `--final-contexts`, and `--rrf-k` affect only that process and never rewrite configuration.
+
+To evaluate the currently ACTIVE managed generation through a runtime pinned once at startup:
+
+```bash
+uv run python scripts/evaluate_managed_retrieval.py --current
+uv run python scripts/evaluate_managed_retrieval.py --current \
+  --output artifacts/retrieval_quality_current.json
+```
+
+This command reuses the Phase 2 seed cases and metric formulas, does not call Bedrock or an LLM
+judge, and does not require MLflow. Optional JSON uses
+`retrieval-quality-report-v1` and contains only generation/configuration identity, aggregate
+metrics, case IDs, safe retrieved identities, and per-case scores. The pure comparison helper
+reports metric deltas plus improved, regressed, newly missed, and newly recovered case IDs.
+Optional `max_recall_drop` and `max_mrr_drop` thresholds produce a side-effect-free PASS/FAIL
+result for CI; they do not publish, restore, or block a generation automatically.
 
 The CLI prints distinct embedding-load and reranker-load phases, warms each configured model once,
 then reports every case as it enters the unchanged `retrieve_debug()` production path. To download
