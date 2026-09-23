@@ -3,11 +3,18 @@
 from __future__ import annotations
 
 import math
+import time
 from collections import defaultdict
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from numbers import Real
 from typing import Protocol
 from uuid import UUID
+
+from httpx import TransportError
+from qdrant_client.http.exceptions import (
+    ResponseHandlingException,
+    UnexpectedResponse,
+)
 
 from consumer_finance_rag.lineage.index_types import (
     ActiveChunk,
@@ -70,13 +77,26 @@ class DenseGenerationPlanner:
         embedding_provider: EmbeddingProvider,
         *,
         retrieval_batch_size: int = 256,
+        retrieval_max_attempts: int = 3,
+        retrieval_backoff_seconds: float = 0.25,
+        sleeper: Callable[[float], None] = time.sleep,
     ) -> None:
         if retrieval_batch_size <= 0:
             raise ValueError("retrieval_batch_size must be positive")
+        if (
+            isinstance(retrieval_max_attempts, bool)
+            or retrieval_max_attempts <= 0
+        ):
+            raise ValueError("retrieval_max_attempts must be positive")
+        if retrieval_backoff_seconds < 0:
+            raise ValueError("retrieval_backoff_seconds cannot be negative")
         self._candidate_reader = candidate_reader
         self._vector_reader = vector_reader
         self._embedding_provider = embedding_provider
         self._retrieval_batch_size = retrieval_batch_size
+        self._retrieval_max_attempts = retrieval_max_attempts
+        self._retrieval_backoff_seconds = retrieval_backoff_seconds
+        self._sleeper = sleeper
 
     def plan(
         self,
@@ -274,19 +294,32 @@ class DenseGenerationPlanner:
         issues: list[DenseVectorRetrievalIssue] = []
         for start in range(0, len(point_ids), self._retrieval_batch_size):
             batch = point_ids[start : start + self._retrieval_batch_size]
-            try:
-                result = self._vector_reader.retrieve_dense_vectors(
-                    collection_name,
-                    batch,
-                )
-            except Exception as exc:
-                raise DenseGenerationError(
-                    "Failed to read previous ACTIVE dense vectors from Qdrant"
-                ) from exc
+            result = self._retrieve_batch_with_retry(collection_name, batch)
             records.extend(result.records)
             missing.extend(result.missing_point_ids)
             issues.extend(result.issues)
         return records, missing, issues
+
+    def _retrieve_batch_with_retry(
+        self,
+        collection_name: str,
+        point_ids: tuple[UUID, ...],
+    ) -> DenseVectorRetrievalResult:
+        for attempt in range(1, self._retrieval_max_attempts + 1):
+            try:
+                return self._vector_reader.retrieve_dense_vectors(
+                    collection_name,
+                    point_ids,
+                )
+            except Exception as exc:
+                retryable = _is_transient_qdrant_read_error(exc)
+                if not retryable or attempt == self._retrieval_max_attempts:
+                    raise DenseGenerationError(
+                        "Failed to read previous ACTIVE dense vectors from Qdrant"
+                    ) from exc
+                delay = self._retrieval_backoff_seconds * (2 ** (attempt - 1))
+                self._sleeper(delay)
+        raise AssertionError("bounded retry loop did not return or raise")
 
     def _compute_vectors(
         self,
@@ -394,3 +427,34 @@ def _is_valid_vector(vector: Sequence[float]) -> bool:
         and math.isfinite(float(value))
         for value in vector
     )
+
+
+def _is_transient_qdrant_read_error(exc: Exception) -> bool:
+    """Recognize transport/readiness failures without retrying integrity errors."""
+
+    pending: list[BaseException] = [exc]
+    visited: set[int] = set()
+    while pending:
+        current = pending.pop()
+        if id(current) in visited:
+            continue
+        visited.add(id(current))
+        if isinstance(current, (ConnectionError, TimeoutError, TransportError)):
+            return True
+        if isinstance(current, UnexpectedResponse) and current.status_code in {
+            408,
+            425,
+            429,
+            500,
+            502,
+            503,
+            504,
+        }:
+            return True
+        if isinstance(current, ResponseHandlingException):
+            pending.append(current.source)
+        if current.__cause__ is not None:
+            pending.append(current.__cause__)
+        if current.__context__ is not None:
+            pending.append(current.__context__)
+    return False

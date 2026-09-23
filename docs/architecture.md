@@ -412,6 +412,21 @@ The dashboard derives both ACTIVE validation and historical-audit status from th
 operations report. It does not run a second validator or fold legacy/failed history into the
 current serving-health indicator; generation-level diagnostics remain visible below the summary.
 
+Local deployment preflight is a separate read-only boundary. `scripts/check_environment.py`
+validates the selected profile and safe configuration, probes only required services, compares the
+lineage database's current Alembic revision with repository head, and delegates managed integrity
+to `ManagedIndexOperationsService`. Fixture/evaluation checks never construct a lineage database
+engine. Managed `PASS_WITH_WARNINGS` is serving-ready when ACTIVE health is `PASS`; historical
+findings remain separately visible. `--managed-smoke` enables existing deep ACTIVE payload
+validation without constructing embedding, reranker, Bedrock, judge, or evaluation providers.
+Neither mode migrates, ingests, publishes, restores, cleans, evaluates, or changes ACTIVE state.
+
+Previous-ACTIVE dense-vector reuse reads have finite exponential backoff for recognized transport,
+timeout, connection, rate-limit, and temporary readiness failures. Stored-vector identity or
+integrity findings are not transport retries. Exhaustion aborts the build before embedding fallback,
+preserving truthful reuse/computation accounting and preventing infrastructure failure from being
+misrepresented as an intentional recomputation.
+
 The pure cleanup planner protects ACTIVE, READY, and BUILDING states, the newest configured number
 of RETIRED generations, and RETIRED generations inside the configured minimum-age grace period.
 Older canonical RETIRED collections and present canonical FAILED collections can be eligible.

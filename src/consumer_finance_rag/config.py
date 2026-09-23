@@ -86,6 +86,8 @@ class ManagedIndexSettings(BaseModel):
     sparse_on_disk: bool = False
     retained_retired_generations: int = Field(default=2, ge=0)
     retired_cleanup_min_age_hours: float = Field(default=24.0, ge=0)
+    dense_reuse_read_max_attempts: int = Field(default=3, ge=1, le=10)
+    dense_reuse_read_backoff_seconds: float = Field(default=0.25, ge=0, le=10)
 
 
 class QdrantSettings(BaseModel):

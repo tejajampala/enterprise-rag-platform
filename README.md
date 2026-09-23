@@ -170,6 +170,97 @@ Open Streamlit at its displayed URL and MLflow at <http://localhost:5000>. Boto3
 AWS credential chain; never commit access keys. If Bedrock is not configured, the UI displays an
 actionable message rather than calling AWS.
 
+### Local startup and operations runbook
+
+For a fresh Windows/PowerShell environment, copy the example rather than committing local
+credentials, edit `.env`, and start the existing persistent services:
+
+```powershell
+uv sync
+Copy-Item .env.example .env
+# Edit .env: select the runtime profile and replace local database passwords.
+docker compose up -d
+```
+
+For managed mode, initialize the lineage schema and explicitly create content/index state only
+when needed. None of these write operations run during application startup or preflight:
+
+```powershell
+uv run alembic upgrade head
+uv run python scripts/ingest_incremental.py --mode fixture --apply
+uv run python scripts/index_managed.py --publish
+uv run python scripts/check_environment.py --managed-smoke
+```
+
+For fixture mode, fixture indexing is likewise explicit:
+
+```powershell
+uv run python scripts/ingest.py --mode fixture
+uv run python scripts/check_environment.py
+```
+
+Then launch only the application surfaces required locally:
+
+```powershell
+uv run streamlit run app/streamlit_app.py --server.address 127.0.0.1
+uv run streamlit run app/operations_dashboard.py --server.address 127.0.0.1
+```
+
+For an existing environment, preserve the named volumes and use the shorter read-first path:
+
+```powershell
+docker compose up -d
+uv run alembic current
+uv run alembic heads
+uv run python scripts/check_environment.py --managed-smoke
+uv run streamlit run app/streamlit_app.py --server.address 127.0.0.1
+```
+
+Never run `docker compose down -v` when PostgreSQL, Qdrant, or MLflow data must be preserved. A
+normal `docker compose down` keeps the named volumes; `-v` removes them. Qdrant, MLflow, and the
+lineage PostgreSQL host ports keep their documented numbers but bind to `127.0.0.1` for local-only
+access. The MLflow PostgreSQL service remains separate from lineage PostgreSQL and is not published
+to the host.
+
+`scripts/check_environment.py` is a read-only selected-profile preflight. It validates safe
+configuration, service connectivity, and migration compatibility without loading embeddings,
+rerankers, Bedrock, judges, or evaluation code. Fixture and evaluation profiles never initialize
+lineage PostgreSQL. Managed preflight uses bounded validation; because it does not scan payloads,
+it reports a warning directing the operator to the explicit deep smoke command:
+
+```powershell
+uv run python scripts/check_environment.py --managed-smoke
+```
+
+The managed smoke remains model-free and read-only, but deep-validates ACTIVE payload/ACL/PII
+compatibility and reports the ACTIVE generation, collection existence, PostgreSQL memberships,
+Qdrant points, ACTIVE validation, and historical audit separately. `PASS_WITH_WARNINGS` is
+serving-ready because ACTIVE is valid; legacy RETIRED or incomplete FAILED history stays visible.
+An ACTIVE `FAIL`, missing/ambiguous ACTIVE, migration mismatch, count mismatch, or unavailable
+required service produces `NOT_READY`. An actual live query is a separate explicit action through
+the Streamlit application and may initialize Hugging Face models and call Bedrock; preflight and
+managed smoke never do so.
+
+Common local troubleshooting:
+
+- PostgreSQL authentication failures often mean the password in `.env` no longer matches the
+  credentials stored when the persistent volume was first initialized. Restore the original local
+  credential or perform an intentional database recovery; do not erase the volume as a shortcut.
+- On Windows, `localhost` may resolve through IPv6 or a proxy while Docker ports are bound on IPv4.
+  If a local connection fails, use `127.0.0.1` consistently in PostgreSQL, Qdrant, and MLflow URLs.
+- For Qdrant connection failures, check `docker compose ps`, the Qdrant health status, and that
+  another process is not using ports 6333/6334. Preflight never creates a missing collection.
+- A migration compatibility failure is repaired only by the explicit operator command
+  `uv run alembic upgrade head`; application startup and health checks never migrate automatically.
+- MLflow is optional. Invalid optional configuration is a warning and does not turn a healthy
+  retrieval runtime into a failed readiness result.
+
+Previous-ACTIVE dense-vector reads use a bounded retry only for transport, connection, timeout,
+rate-limit, and temporary service-readiness errors. Attempts and base backoff are configurable with
+`RAG__MANAGED_INDEX__DENSE_REUSE_READ_MAX_ATTEMPTS` and
+`RAG__MANAGED_INDEX__DENSE_REUSE_READ_BACKOFF_SECONDS`. Integrity errors are not retried, and an
+exhausted infrastructure read aborts publication rather than silently recomputing embeddings.
+
 ### Phase 3 managed-ingestion planning and lineage apply
 
 After configuring `RAG__DATABASE__URL` and applying the application migration with

@@ -302,6 +302,12 @@ class ManagedIndexService:
                 _SessionCandidateReader(self._session_factory),
                 vector_reader,
                 self._embedding_provider,
+                retrieval_max_attempts=(
+                    self._managed_index_settings.dense_reuse_read_max_attempts
+                ),
+                retrieval_backoff_seconds=(
+                    self._managed_index_settings.dense_reuse_read_backoff_seconds
+                ),
             ).plan(
                 manifest,
                 desired.configuration.embedding_fingerprint,

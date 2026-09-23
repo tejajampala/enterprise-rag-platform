@@ -114,11 +114,18 @@ def test_managed_index_settings_are_typed_and_environment_configurable(
     assert defaults.managed_index.sparse_on_disk is False
     assert defaults.managed_index.retained_retired_generations == 2
     assert defaults.managed_index.retired_cleanup_min_age_hours == 24
+    assert defaults.managed_index.dense_reuse_read_max_attempts == 3
+    assert defaults.managed_index.dense_reuse_read_backoff_seconds == 0.25
 
     monkeypatch.setenv("RAG__MANAGED_INDEX__HNSW_M", "32")
     monkeypatch.setenv("RAG__MANAGED_INDEX__BM25_K1", "1.5")
     monkeypatch.setenv("RAG__MANAGED_INDEX__RETAINED_RETIRED_GENERATIONS", "3")
     monkeypatch.setenv("RAG__MANAGED_INDEX__RETIRED_CLEANUP_MIN_AGE_HOURS", "48")
+    monkeypatch.setenv("RAG__MANAGED_INDEX__DENSE_REUSE_READ_MAX_ATTEMPTS", "4")
+    monkeypatch.setenv(
+        "RAG__MANAGED_INDEX__DENSE_REUSE_READ_BACKOFF_SECONDS",
+        "0.5",
+    )
 
     overridden = load_settings(path)
 
@@ -126,6 +133,8 @@ def test_managed_index_settings_are_typed_and_environment_configurable(
     assert overridden.managed_index.bm25_k1 == 1.5
     assert overridden.managed_index.retained_retired_generations == 3
     assert overridden.managed_index.retired_cleanup_min_age_hours == 48
+    assert overridden.managed_index.dense_reuse_read_max_attempts == 4
+    assert overridden.managed_index.dense_reuse_read_backoff_seconds == 0.5
 
 
 def test_query_hnsw_ef_is_optional_and_environment_configurable(

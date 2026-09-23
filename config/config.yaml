@@ -49,6 +49,8 @@ managed_index:
   sparse_on_disk: false
   retained_retired_generations: 2
   retired_cleanup_min_age_hours: 24
+  dense_reuse_read_max_attempts: 3
+  dense_reuse_read_backoff_seconds: 0.25
 
 qdrant:
   url: http://localhost:6333

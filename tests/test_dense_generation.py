@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import ast
 import math
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Any
 from uuid import UUID, uuid4, uuid5
@@ -154,11 +154,13 @@ class FakeVectors:
         missing: Sequence[UUID] = (),
         issues: Sequence[DenseVectorRetrievalIssue] = (),
         error: Exception | None = None,
+        errors: Sequence[Exception] = (),
     ) -> None:
         self.records = {item.point_id: item for item in records}
         self.missing = set(missing)
         self.issues = {item.point_id: item for item in issues}
         self.error = error
+        self.errors = list(errors)
         self.read_calls: list[tuple[str, tuple[UUID, ...]]] = []
         self.mutation_calls = 0
 
@@ -167,6 +169,8 @@ class FakeVectors:
     ) -> DenseVectorRetrievalResult:
         requested = tuple(point_ids)
         self.read_calls.append((collection_name, requested))
+        if self.errors:
+            raise self.errors.pop(0)
         if self.error is not None:
             raise self.error
         return DenseVectorRetrievalResult(
@@ -224,12 +228,18 @@ def planner(
     embeddings: FakeEmbeddings,
     *,
     batch_size: int = 256,
+    max_attempts: int = 3,
+    backoff_seconds: float = 0.25,
+    sleeper: Callable[[float], None] = lambda _delay: None,
 ) -> DenseGenerationPlanner:
     return DenseGenerationPlanner(
         candidates,
         vectors,
         embeddings,
         retrieval_batch_size=batch_size,
+        retrieval_max_attempts=max_attempts,
+        retrieval_backoff_seconds=backoff_seconds,
+        sleeper=sleeper,
     )
 
 
@@ -468,6 +478,75 @@ def test_qdrant_infrastructure_failure_aborts_instead_of_computing() -> None:
             FakeVectors(error=ConnectionError("offline")),
             embeddings,
         ).plan(manifest(current), FINGERPRINT, previous())
+    assert embeddings.calls == []
+
+
+def test_transient_qdrant_read_retries_then_reuses_without_embedding() -> None:
+    current = active_chunk("current", 0)
+    source = candidate(current)
+    vectors = FakeVectors(
+        (record(source),),
+        errors=(ConnectionError("starting"), TimeoutError("not ready")),
+    )
+    delays: list[float] = []
+    embeddings = FakeEmbeddings(())
+
+    plan = planner(
+        FakeCandidates((source,)),
+        vectors,
+        embeddings,
+        max_attempts=3,
+        backoff_seconds=0.1,
+        sleeper=delays.append,
+    ).plan(manifest(current), FINGERPRINT, previous())
+
+    assert plan.chunks[0].action is DensePlanAction.REUSED
+    assert len(vectors.read_calls) == 3
+    assert delays == [0.1, 0.2]
+    assert embeddings.calls == []
+
+
+def test_transient_qdrant_read_retry_is_bounded_and_never_recomputes() -> None:
+    current = active_chunk("current", 0)
+    source = candidate(current)
+    vectors = FakeVectors(error=ConnectionError("offline"))
+    delays: list[float] = []
+    embeddings = FakeEmbeddings(((0.1, 0.2),))
+
+    with pytest.raises(DenseGenerationError, match="Qdrant"):
+        planner(
+            FakeCandidates((source,)),
+            vectors,
+            embeddings,
+            max_attempts=3,
+            backoff_seconds=0.1,
+            sleeper=delays.append,
+        ).plan(manifest(current), FINGERPRINT, previous())
+
+    assert len(vectors.read_calls) == 3
+    assert delays == [0.1, 0.2]
+    assert embeddings.calls == []
+
+
+def test_non_transient_qdrant_read_error_is_not_retried_or_recomputed() -> None:
+    current = active_chunk("current", 0)
+    source = candidate(current)
+    vectors = FakeVectors(error=ValueError("invalid stored response"))
+    delays: list[float] = []
+    embeddings = FakeEmbeddings(((0.1, 0.2),))
+
+    with pytest.raises(DenseGenerationError, match="Qdrant"):
+        planner(
+            FakeCandidates((source,)),
+            vectors,
+            embeddings,
+            max_attempts=3,
+            backoff_seconds=0.1,
+            sleeper=delays.append,
+        ).plan(manifest(current), FINGERPRINT, previous())
+
+    assert len(vectors.read_calls) == 1
+    assert delays == []
     assert embeddings.calls == []
 
 
