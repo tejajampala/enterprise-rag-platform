@@ -1,5 +1,9 @@
 # End-to-end managed RAG demonstration
 
+For the public portfolio path, including the Cloudflare Quick Tunnel and its fail-closed controls,
+see [Local public demo](local-public-demo.md). For a code-level walkthrough from ingestion through
+answer evaluation, see [Project learning guide](project-learning-guide.md).
+
 This runbook demonstrates the repository as implemented. It uses the committed fixture for a
 small, reproducible managed corpus and keeps every destructive lifecycle action out of the demo.
 Run commands from the repository root.

@@ -210,14 +210,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     trace_ids: list[str] = []
     for case in dataset.cases:
         response = pipeline.answer(case.question)
-        trace_id: str | None = None
-        if settings.mlflow.enabled:
-            try:
-                import mlflow
-
-                trace_id = mlflow.get_last_active_trace_id()
-            except Exception:
-                trace_id = None
+        trace_id = response.trace_id
         if trace_id:
             trace_ids.append(trace_id)
         generated.append(

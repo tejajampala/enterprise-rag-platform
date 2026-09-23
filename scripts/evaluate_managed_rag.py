@@ -38,7 +38,7 @@ from consumer_finance_rag.lineage.managed_retrieval import (
     build_managed_retrieval_runtime,
 )
 from consumer_finance_rag.lineage.repository import LineageRepository
-from consumer_finance_rag.observability import NoOpTracer
+from consumer_finance_rag.observability import NoOpTracer, TraceContentPolicy
 
 
 def _positive_int(value: str) -> int:
@@ -148,15 +148,6 @@ def _content_tracking_settings(
     )
 
 
-def _last_trace_id() -> str | None:
-    try:
-        import mlflow
-
-        return mlflow.get_last_active_trace_id()
-    except Exception:
-        return None
-
-
 def _report_path(
     settings: AppSettings,
     runtime: ManagedRetrievalRuntime,
@@ -194,7 +185,6 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
 
     pipeline = None
-    trace_id_provider = None
     if args.generate:
         content_tracking = bool(args.log_mlflow or args.with_mlflow_judges)
         application = build_application_runtime(
@@ -207,10 +197,9 @@ def main(argv: Sequence[str] | None = None) -> int:
                 index_state_id=runtime.index_state_id,
             ),
             telemetry_sink=telemetry,
+            trace_content_policy=TraceContentPolicy.APPROVED_PUBLIC_EVALUATION,
         )
         pipeline = application.pipeline
-        if content_tracking:
-            trace_id_provider = _last_trace_id
 
     report = evaluate_managed_rag(
         runtime,
@@ -224,7 +213,6 @@ def main(argv: Sequence[str] | None = None) -> int:
         with_ragas=bool(args.with_ragas),
         mlflow_settings=settings.mlflow,
         telemetry_sink=telemetry,
-        trace_id_provider=trace_id_provider,
     )
     output = write_managed_rag_report(report, _report_path(settings, runtime, args.output))
 

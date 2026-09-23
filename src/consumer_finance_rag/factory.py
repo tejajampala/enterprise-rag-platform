@@ -25,6 +25,7 @@ from consumer_finance_rag.lineage.repository import LineageRepository
 from consumer_finance_rag.observability import (
     RetrievalTelemetryContext,
     RetrievalTelemetrySink,
+    TraceContentPolicy,
     Tracer,
     build_tracer,
 )
@@ -222,10 +223,15 @@ def build_application_runtime(
     *,
     retrieval_runtime: RetrievalRuntime | None = None,
     telemetry_sink: RetrievalTelemetrySink | None = None,
+    trace_content_policy: TraceContentPolicy = TraceContentPolicy.METADATA_ONLY,
 ) -> ApplicationRuntime:
     """Build the explicitly selected retrieval profile and backend-agnostic RAG pipeline."""
 
-    tracer = build_tracer(settings.mlflow)
+    tracer = (
+        build_tracer(settings.mlflow)
+        if trace_content_policy is TraceContentPolicy.METADATA_ONLY
+        else build_tracer(settings.mlflow, content_policy=trace_content_policy)
+    )
     if retrieval_runtime is None:
         runtime = build_runtime_retrieval(
             settings,

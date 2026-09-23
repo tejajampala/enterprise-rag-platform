@@ -161,12 +161,14 @@ class HybridRetrievalService:
         *,
         access_context: AccessContext | None = None,
         pii_policy: PIIHandlingPolicy | None = None,
+        request_id: str | None = None,
     ) -> RetrievalResult:
         trace = self.retrieve_debug(
             query,
             top_k=top_k,
             access_context=access_context,
             pii_policy=pii_policy,
+            request_id=request_id,
         )
         return RetrievalResult(chunks=trace.reranked, metadata=trace.metadata)
 
@@ -177,11 +179,12 @@ class HybridRetrievalService:
         *,
         access_context: AccessContext | None = None,
         pii_policy: PIIHandlingPolicy | None = None,
+        request_id: str | None = None,
     ) -> RetrievalTrace:
         """Run the production retrieval path while retaining each ranked stage."""
 
         started = perf_counter()
-        request_id = str(uuid4())
+        resolved_request_id = request_id or str(uuid4())
         query_timestamp = datetime.now(UTC)
         resolved_access = access_context or AccessContext()
         resolved_pii_policy = pii_policy or (
@@ -216,7 +219,7 @@ class HybridRetrievalService:
             error_type: str | None = None,
         ) -> RetrievalMetrics:
             return RetrievalMetrics(
-                request_id=request_id,
+                request_id=resolved_request_id,
                 profile=self.telemetry_context.profile,
                 index_state_id=self.telemetry_context.index_state_id,
                 generation=self.telemetry_context.generation,

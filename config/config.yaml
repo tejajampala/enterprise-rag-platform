@@ -75,6 +75,15 @@ retrieval:
 context:
   max_characters: 12000
 
+public_showcase:
+  enabled: false
+  inference_enabled: false
+  approved_corpus_key: consumer-finance-managed
+  max_question_characters: 500
+  max_requests_per_window: 20
+  rate_window_seconds: 3600
+  max_concurrent_requests: 2
+
 mlflow:
   enabled: true
   tracking_uri: http://localhost:5000

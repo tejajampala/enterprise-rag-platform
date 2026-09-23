@@ -8,7 +8,12 @@ import boto3
 from botocore.config import Config
 from botocore.exceptions import BotoCoreError, ClientError
 
-from consumer_finance_rag.observability import NoOpTracer, Tracer, bedrock_token_usage
+from consumer_finance_rag.observability import (
+    NoOpTracer,
+    TraceContentPolicy,
+    Tracer,
+    bedrock_token_usage,
+)
 from consumer_finance_rag.providers import LLMResult
 
 
@@ -141,5 +146,11 @@ class BedrockLLMProvider:
             span.set_attributes(
                 {key: value for key, value in response_attributes.items() if value is not None}
             )
-            span.set_outputs({"response": text})
+            if (
+                getattr(self._tracer, "content_policy", TraceContentPolicy.METADATA_ONLY)
+                is TraceContentPolicy.APPROVED_PUBLIC_EVALUATION
+            ):
+                span.set_outputs({"response": text})
+            else:
+                span.set_outputs({"response_characters": len(text)})
             return result

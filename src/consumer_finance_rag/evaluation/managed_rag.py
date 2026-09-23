@@ -469,7 +469,14 @@ def evaluate_managed_rag(
                     contexts=[item.chunk.text for item in response.retrieved_chunks],
                     chunk_ids=[item.chunk.chunk_id for item in response.retrieved_chunks],
                     token_usage=bedrock_token_usage(response.generation_metadata),
-                    trace_id=trace_id_provider() if trace_id_provider is not None else None,
+                    trace_id=(
+                        response.trace_id
+                        or (
+                            trace_id_provider()
+                            if trace_id_provider is not None
+                            else None
+                        )
+                    ),
                 )
             )
 
