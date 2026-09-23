@@ -136,6 +136,7 @@ class MLflowSettings(BaseModel):
 
 class EvaluationSettings(BaseModel):
     dataset_path: Path = Path("data/evaluation/seed_cases.json")
+    managed_dataset_path: Path = Path("data/evaluation/managed_public_cases.json")
     dataset_name: str = "consumer-finance-seed-evaluation"
     dataset_version: str = "1.0"
     qdrant_collection_name: str = "consumer_finance_evaluation"

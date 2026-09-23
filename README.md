@@ -569,6 +569,44 @@ result for CI; they do not publish, restore, or block a generation automatically
 adapter logs raw queries, retrieved context, matched PII values, principals, credentials, or group
 names.
 
+### Evaluate the managed end-to-end RAG path
+
+The managed answer evaluator resolves the ACTIVE generation once, then reuses that runtime's
+exact collection, BM25 state, configuration, ACL enforcement, and REDACT-mode PII handling for
+the entire evaluation. Its committed dataset is a small, versioned set of reviewed synthetic
+PUBLIC cases grounded in the fixture source text. The command rejects unreviewed cases,
+identity-bearing authorization contexts, corpus mismatches, and expected chunks absent from the
+pinned collection.
+
+The default is deterministic retrieval-only evaluation and makes no Bedrock or judge calls:
+
+```bash
+uv run python scripts/evaluate_managed_rag.py --current
+```
+
+Generation and each judge backend are separate, explicit opt-ins:
+
+```bash
+uv run python scripts/evaluate_managed_rag.py --current --generate --limit 2
+uv run python scripts/evaluate_managed_rag.py --current --generate --limit 2 --with-mlflow-judges
+uv run python scripts/evaluate_managed_rag.py --current --generate --limit 2 --with-ragas
+uv run python scripts/evaluate_managed_rag.py --current --generate --limit 2 \
+  --with-mlflow-judges --with-ragas --log-mlflow
+```
+
+The last three commands can incur AWS charges and require an explicit `bedrock:/...` judge model
+when a judge is selected. Answer generation continues to use the independently configured Bedrock
+generation model. A versioned JSON report records pinned generation/build/model identities,
+deterministic retrieval quality, answer and judge status, safe numeric metrics, latency, and token
+usage. It deliberately omits questions, answers, contexts, judge rationales, principals, groups,
+and matched PII values. Skipped or failed judges are never represented as passing scores.
+
+Operational retrieval telemetry is metadata-only. MLflow GenAI evaluation is content-bearing:
+when `--with-mlflow-judges` or `--log-mlflow` enables tracing, only the reviewed PUBLIC dataset may
+cross that boundary. Combined MLflow mode appends the safe report to the judge evaluation run, so
+one invocation creates one experiment run rather than one run per case. `--with-ragas` alone uses
+the configured Bedrock judge without enabling MLflow tracing.
+
 The CLI prints distinct embedding-load and reranker-load phases, warms each configured model once,
 then reports every case as it enters the unchanged `retrieve_debug()` production path. To download
 models and prove one tiny inference separately from evaluation, reuse the same factory with:

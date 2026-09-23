@@ -1,0 +1,62 @@
+{
+  "format_version": "managed-rag-evaluation-dataset-v1",
+  "name": "consumer-finance-managed-public-evaluation",
+  "version": "1.0",
+  "status": "reviewed",
+  "corpus_key": "consumer-finance-managed",
+  "privacy_classification": "PUBLIC_SYNTHETIC_REVIEWED",
+  "cases": [
+    {
+      "case_id": "managed-public-credit-report-001",
+      "question": "What should a consumer include when disputing an error on a credit report?",
+      "category": "credit reporting",
+      "difficulty": "easy",
+      "reference_answer": "Identify each item believed to be wrong, explain why it is inaccurate, include copies of supporting documents, and keep the originals and records of what was sent.",
+      "expected_facts": [
+        "Identify each disputed item and explain why it is wrong.",
+        "Include copies of supporting documents and retain the originals and sending records."
+      ],
+      "expected_source_ids": [
+        "cfpb-credit-report-errors"
+      ],
+      "expected_document_ids": [
+        "cfpb-credit-report-errors:7c6f2a7acdac76c5"
+      ],
+      "expected_chunk_ids": [
+        "cfpb-credit-report-errors:7c6f2a7acdac76c5:0:7c6f2a7acdac"
+      ],
+      "review_status": "reviewed",
+      "authorization": {
+        "visibility": "PUBLIC",
+        "principal_id": null,
+        "groups": []
+      }
+    },
+    {
+      "case_id": "managed-public-mortgage-001",
+      "question": "When should most borrowers receive a Closing Disclosure, and why?",
+      "category": "mortgages",
+      "difficulty": "easy",
+      "reference_answer": "For most mortgages, the lender must provide the Closing Disclosure at least three business days before closing so the borrower can compare it with the Loan Estimate and ask questions.",
+      "expected_facts": [
+        "The lender generally provides the Closing Disclosure at least three business days before closing.",
+        "The review period allows comparison with the Loan Estimate and time to ask questions."
+      ],
+      "expected_source_ids": [
+        "cfpb-mortgage-closing-disclosure"
+      ],
+      "expected_document_ids": [
+        "cfpb-mortgage-closing-disclosure:c439f57258e3c577"
+      ],
+      "expected_chunk_ids": [
+        "cfpb-mortgage-closing-disclosure:c439f57258e3c577:0:c439f57258e3"
+      ],
+      "review_status": "reviewed",
+      "authorization": {
+        "visibility": "PUBLIC",
+        "principal_id": null,
+        "groups": []
+      }
+    }
+  ]
+}
