@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+from uuid import uuid4
+
 from consumer_finance_rag.access import AccessContext
 from consumer_finance_rag.context import ContextBuilder
 from consumer_finance_rag.models import ModelMetadata, RAGResponse
-from consumer_finance_rag.observability import NoOpTracer, Tracer
+from consumer_finance_rag.observability import NoOpTracer, Tracer, trace_id_from_span
 from consumer_finance_rag.pii import PIIHandlingPolicy
 from consumer_finance_rag.prompts import SYSTEM_PROMPT, build_user_prompt
 from consumer_finance_rag.providers import EmbeddingProvider, LLMProvider, RerankerProvider
@@ -38,8 +40,11 @@ class RAGPipeline:
         *,
         access_context: AccessContext | None = None,
         pii_policy: PIIHandlingPolicy | None = None,
+        request_id: str | None = None,
     ) -> RAGResponse:
+        resolved_request_id = request_id or str(uuid4())
         attributes: dict[str, object] = {
+            "request.id": resolved_request_id,
             "embedding.model": self.embedding_provider.model_name,
             "reranker.model": self.reranker.model_name,
             "generation.model": self.llm.model_name,
@@ -47,15 +52,19 @@ class RAGPipeline:
             **self.trace_attributes,
         }
         with self.tracer.span("rag_request", span_type="CHAIN", attributes=attributes) as span:
+            trace_id = trace_id_from_span(span)
             span.set_inputs({"query_characters": len(question)})
             retrieval_result = self.retrieval.retrieve(
                 question,
                 access_context=access_context,
                 pii_policy=pii_policy,
+                request_id=resolved_request_id,
             )
             context = self.context_builder.build(retrieval_result.chunks)
             result = self.llm.generate(SYSTEM_PROMPT, build_user_prompt(question, context.text))
             response = RAGResponse(
+                request_id=resolved_request_id,
+                trace_id=trace_id,
                 question=question,
                 answer=result.text,
                 citations=context.citations,

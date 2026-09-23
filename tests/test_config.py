@@ -148,3 +148,27 @@ def test_query_hnsw_ef_is_optional_and_environment_configurable(
     monkeypatch.setenv("RAG__RETRIEVAL__HNSW_EF", "80")
 
     assert load_settings(path).retrieval.hnsw_ef == 80
+
+
+def test_public_showcase_is_fail_closed_and_environment_configurable(
+    tmp_path: Path,
+    monkeypatch: MonkeyPatch,
+) -> None:
+    path = tmp_path / "config.yaml"
+    path.write_text(CONFIG, encoding="utf-8")
+
+    defaults = load_settings(path).public_showcase
+    assert defaults.enabled is False
+    assert defaults.inference_enabled is False
+    assert defaults.approved_corpus_key == "consumer-finance-managed"
+
+    monkeypatch.setenv("RAG__PUBLIC_SHOWCASE__ENABLED", "true")
+    monkeypatch.setenv("RAG__PUBLIC_SHOWCASE__INFERENCE_ENABLED", "true")
+    monkeypatch.setenv("RAG__PUBLIC_SHOWCASE__MAX_REQUESTS_PER_WINDOW", "7")
+    monkeypatch.setenv("RAG__PUBLIC_SHOWCASE__MAX_CONCURRENT_REQUESTS", "1")
+
+    overridden = load_settings(path).public_showcase
+    assert overridden.enabled is True
+    assert overridden.inference_enabled is True
+    assert overridden.max_requests_per_window == 7
+    assert overridden.max_concurrent_requests == 1

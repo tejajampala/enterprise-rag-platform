@@ -2,7 +2,9 @@
 
 This document explains the implemented managed RAG design and the engineering trade-offs behind
 it. It complements the command-oriented [end-to-end demo](end-to-end-demo.md) and the lower-level
-[architecture reference](architecture.md).
+[architecture reference](architecture.md). The [project learning guide](project-learning-guide.md)
+adds exact request/evaluation call paths, and the [local public demo](local-public-demo.md) covers
+the fail-closed Quick Tunnel boundary.
 
 ## System boundary
 
@@ -301,7 +303,8 @@ real orchestration boundaries, SQLite, in-memory Qdrant, and deterministic model
 - Fixture and evaluation profiles remain database-independent legacy paths; managed semantics do
   not leak into them.
 - Authentication, identity-provider integration, runtime leases, and automatic hot reload are not
-  provided. ACL consumes caller-resolved identity facts.
+  provided. Internal ACL paths consume caller-resolved identity facts; the anonymous public
+  showcase deliberately rejects identity input and constructs an empty PUBLIC-only context.
 - The local dashboard is read-only and has no built-in authentication; bind it locally or provide
   an external control.
 - Cleanup is physical Qdrant retention only. It preserves PostgreSQL history, and a cleaned

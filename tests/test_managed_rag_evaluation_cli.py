@@ -12,6 +12,7 @@ from uuid import UUID
 import pytest
 
 from consumer_finance_rag.config import MLflowSettings
+from consumer_finance_rag.observability import TraceContentPolicy
 
 SCRIPT_PATH = Path("scripts/evaluate_managed_rag.py")
 SCRIPT_SPEC = importlib.util.spec_from_file_location(
@@ -184,9 +185,11 @@ def test_combined_mode_reuses_pinned_runtime_and_one_mlflow_judge_run(
         *,
         retrieval_runtime: Any,
         telemetry_sink: object,
+        trace_content_policy: TraceContentPolicy,
     ) -> SimpleNamespace:
         del telemetry_sink
         assert application_settings is settings
+        assert trace_content_policy is TraceContentPolicy.APPROVED_PUBLIC_EVALUATION
         wrappers.append(retrieval_runtime)
         assert retrieval_runtime.generation == runtime.generation
         assert retrieval_runtime.index_state_id == runtime.index_state_id

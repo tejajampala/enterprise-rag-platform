@@ -124,6 +124,21 @@ class ContextSettings(BaseModel):
     max_characters: int = Field(default=12000, gt=0)
 
 
+class PublicShowcaseSettings(BaseModel):
+    """Fail-closed controls for the anonymously accessible local showcase."""
+
+    enabled: bool = False
+    inference_enabled: bool = False
+    approved_corpus_key: str = Field(
+        default="consumer-finance-managed",
+        min_length=1,
+    )
+    max_question_characters: int = Field(default=500, ge=20, le=4000)
+    max_requests_per_window: int = Field(default=20, ge=1, le=1000)
+    rate_window_seconds: int = Field(default=3600, ge=1, le=86400)
+    max_concurrent_requests: int = Field(default=2, ge=1, le=32)
+
+
 class MLflowSettings(BaseModel):
     enabled: bool = True
     tracking_uri: str = "http://localhost:5000"
@@ -179,6 +194,7 @@ class AppSettings(BaseSettings):
     chunking: ChunkingSettings = ChunkingSettings()
     retrieval: RetrievalSettings = RetrievalSettings()
     context: ContextSettings = ContextSettings()
+    public_showcase: PublicShowcaseSettings = PublicShowcaseSettings()
     mlflow: MLflowSettings = MLflowSettings()
     evaluation: EvaluationSettings = EvaluationSettings()
     corpus_expansion: CorpusExpansionSettings = CorpusExpansionSettings()

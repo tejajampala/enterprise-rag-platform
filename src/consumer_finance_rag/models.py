@@ -100,6 +100,8 @@ class RAGResponse(BaseModel):
 
     model_config = ConfigDict(frozen=True)
 
+    request_id: str
+    trace_id: str | None = None
     question: str
     answer: str
     citations: list[Citation]

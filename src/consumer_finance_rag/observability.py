@@ -45,6 +45,13 @@ class RetrievalACLMode(StrEnum):
     FILTER_AND_VALIDATE = "qdrant_filter_and_defense_in_depth_validation"
 
 
+class TraceContentPolicy(StrEnum):
+    """Whether trace spans may contain reviewed evaluation text."""
+
+    METADATA_ONLY = "metadata_only"
+    APPROVED_PUBLIC_EVALUATION = "approved_public_evaluation"
+
+
 @dataclass(frozen=True, slots=True)
 class RetrievalTelemetryContext:
     """Runtime identity pinned once and copied into every request trace."""
@@ -250,6 +257,7 @@ class NoOpTracer:
     """Tracing implementation used when observability is explicitly disabled."""
 
     status = TracingStatus(configured=False, active=False, reason="MLflow tracing is disabled")
+    content_policy = TraceContentPolicy.METADATA_ONLY
 
     @contextmanager
     def span(
@@ -265,8 +273,14 @@ class NoOpTracer:
 class MLflowTracer:
     """Small manual-span adapter; MLflow remains the tracing system of record."""
 
-    def __init__(self, settings: MLflowSettings) -> None:
+    def __init__(
+        self,
+        settings: MLflowSettings,
+        *,
+        content_policy: TraceContentPolicy = TraceContentPolicy.METADATA_ONLY,
+    ) -> None:
         self._settings = settings
+        self.content_policy = content_policy
         self._active = False
         self._reason: str | None = None
         try:
@@ -276,7 +290,7 @@ class MLflowTracer:
             mlflow.set_experiment(settings.experiment_name)
             self._active = True
         except Exception as error:  # MLflow can fail through transport-specific exceptions.
-            self._reason = f"MLflow tracing unavailable: {error}"
+            self._reason = f"MLflow tracing unavailable ({type(error).__name__})"
             warnings.warn(self._reason, RuntimeWarning, stacklevel=2)
 
     @property
@@ -297,13 +311,32 @@ class MLflowTracer:
         import mlflow
 
         with mlflow.start_span(name=name, span_type=span_type, attributes=attributes) as span:
+            if name == "rag_request" and attributes is not None:
+                request_id = attributes.get("request.id")
+                if isinstance(request_id, str):
+                    mlflow.update_current_trace(
+                        client_request_id=request_id,
+                        request_preview="[QUESTION OMITTED]",
+                        response_preview="[ANSWER OMITTED]",
+                    )
             yield span
 
 
-def build_tracer(settings: MLflowSettings) -> Tracer:
+def build_tracer(
+    settings: MLflowSettings,
+    *,
+    content_policy: TraceContentPolicy = TraceContentPolicy.METADATA_ONLY,
+) -> Tracer:
     if not settings.enabled:
         return NoOpTracer()
-    return MLflowTracer(settings)
+    return MLflowTracer(settings, content_policy=content_policy)
+
+
+def trace_id_from_span(span: TraceSpan) -> str | None:
+    """Read the ID from the active span itself, never from process-global state."""
+
+    trace_id = getattr(span, "trace_id", None)
+    return trace_id if isinstance(trace_id, str) and trace_id else None
 
 
 def chunk_summaries(chunks: Sequence[RetrievedChunk]) -> list[dict[str, Any]]:

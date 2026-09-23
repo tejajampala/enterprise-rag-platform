@@ -7,10 +7,15 @@ from typing import Any
 from qdrant_client import models
 
 from consumer_finance_rag.bedrock import BedrockLLMProvider
-from consumer_finance_rag.config import RetrievalSettings
+from consumer_finance_rag.config import MLflowSettings, RetrievalSettings
 from consumer_finance_rag.context import ContextBuilder
 from consumer_finance_rag.models import RetrievedChunk
-from consumer_finance_rag.observability import TraceSpan, bedrock_token_usage
+from consumer_finance_rag.observability import (
+    MLflowTracer,
+    TraceContentPolicy,
+    TraceSpan,
+    bedrock_token_usage,
+)
 from consumer_finance_rag.pipeline import RAGPipeline
 from consumer_finance_rag.retrieval import HybridRetrievalService
 from consumer_finance_rag.sparse import BM25SparseEncoder
@@ -36,7 +41,11 @@ class RecordingSpan:
 
 
 class RecordingTracer:
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        content_policy: TraceContentPolicy = TraceContentPolicy.METADATA_ONLY,
+    ) -> None:
+        self.content_policy = content_policy
         self.names: list[str] = []
         self.records: list[tuple[str, str, Any]] = []
         self.stack: list[str] = []
@@ -170,6 +179,8 @@ def test_tracing_preserves_output_and_has_expected_hierarchy(
     recorded = repr(tracer.records)
     assert "Question?" not in recorded
     assert candidate.chunk.text not in recorded
+    assert "Grounded [C1]." not in recorded
+    assert ("bedrock_generation", "outputs", {"response_characters": 14}) in tracer.records
 
 
 def test_bedrock_usage_maps_to_response_and_mlflow_token_attribute() -> None:
@@ -188,3 +199,58 @@ def test_bedrock_usage_maps_to_response_and_mlflow_token_attribute() -> None:
     assert bedrock_token_usage(result.response_metadata) == expected
     assert ("bedrock_generation", "mlflow.chat.tokenUsage", expected) in tracer.records
     assert bedrock_token_usage({"usage": {"inputTokens": 4}}) is None
+
+
+def test_bedrock_text_trace_output_requires_approved_public_evaluation_policy() -> None:
+    tracer = RecordingTracer(TraceContentPolicy.APPROVED_PUBLIC_EVALUATION)
+
+    BedrockLLMProvider(
+        region="us-east-1",
+        model_id="model",
+        max_tokens=10,
+        temperature=0.0,
+        top_p=1.0,
+        client=FakeBedrockClient(),
+        tracer=tracer,
+    ).generate("system", "user")
+
+    assert (
+        "bedrock_generation",
+        "outputs",
+        {"response": "Grounded [C1]."},
+    ) in tracer.records
+
+
+def test_mlflow_root_span_uses_its_request_id_for_direct_trace_correlation(
+    monkeypatch: Any,
+) -> None:
+    import mlflow
+
+    updates: list[dict[str, str]] = []
+    span = RecordingSpan("rag_request", [])
+    span.trace_id = "trace-for-this-request"  # type: ignore[attr-defined]
+
+    @contextmanager
+    def fake_start_span(**_kwargs: Any) -> Iterator[RecordingSpan]:
+        yield span
+
+    monkeypatch.setattr(mlflow, "set_tracking_uri", lambda _value: None)
+    monkeypatch.setattr(mlflow, "set_experiment", lambda _value: None)
+    monkeypatch.setattr(mlflow, "start_span", fake_start_span)
+    monkeypatch.setattr(mlflow, "update_current_trace", lambda **values: updates.append(values))
+    tracer = MLflowTracer(MLflowSettings())
+
+    with tracer.span(
+        "rag_request",
+        span_type="CHAIN",
+        attributes={"request.id": "request-for-this-visitor"},
+    ) as active:
+        assert active.trace_id == "trace-for-this-request"  # type: ignore[attr-defined]
+
+    assert updates == [
+        {
+            "client_request_id": "request-for-this-visitor",
+            "request_preview": "[QUESTION OMITTED]",
+            "response_preview": "[ANSWER OMITTED]",
+        }
+    ]

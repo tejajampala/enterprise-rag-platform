@@ -812,6 +812,27 @@ traces are content-bearing and therefore require explicit CLI opt-in; combined l
 single judge run instead of creating a run per case. RAGAS and MLflow reuse their existing
 adapters, and a missing/failed judge is represented as `FAILED` or `UNAVAILABLE`, never as a pass.
 
+### Local public showcase boundary
+
+`public_showcase.py` is the only anonymous application boundary. It refuses to start unless both
+the configured and resolved runtime profiles are `managed`, the configured corpus is the approved
+PUBLIC corpus, the runtime is pinned to a generation, and ACL plus PII enforcement are enabled.
+Visitors cannot provide a principal, groups, or a PII policy: the service constructs an empty
+`AccessContext` and always selects `REDACT` server-side.
+
+The cached public service owns a process-wide bounded request window and concurrency semaphore.
+The inference kill switch is checked for every request, before any retrieval or Bedrock call. These
+controls protect one local Streamlit process; they are deliberately described as local showcase
+controls rather than a distributed production quota system.
+
+A request ID is created at the boundary and passed through `RAGPipeline.answer()` into managed
+retrieval. The active root span supplies that request's trace ID directly, and the request-specific
+telemetry collector is keyed by request ID. No "latest trace" process-global lookup is used.
+Public requests use `TraceContentPolicy.METADATA_ONLY`, so the Bedrock span records response length,
+model identity, latency, and token counts but not answer text. The managed evaluator must opt in to
+`APPROVED_PUBLIC_EVALUATION`, and its content-bearing cases remain limited to the reviewed PUBLIC
+evaluation dataset.
+
 ## MLflow GenAI and RAGAS
 
 `evaluation/mlflow_genai.py` is the only MLflow judge/dataset adapter. Judge construction calls
@@ -989,6 +1010,8 @@ case list; it does not create an evaluator-specific retrieval implementation.
 
 Retrieved content remains untrusted prompt data. Traces avoid secrets and vectors. Boto3 uses
 standard credential resolution. Paid generation and judging require explicit commands/config.
-Authentication, identity-provider integration, semantic/LLM PII pipelines, production
-deployment, online evaluation, persisted regression policy, and automatic deployment gates remain
-future work.
+The local public showcase adds an anonymous PUBLIC-only, REDACT-only boundary behind a Cloudflare
+Quick Tunnel; PostgreSQL, Qdrant, MLflow, and the operations dashboard stay private and local.
+Authentication, identity-provider integration, semantic/LLM PII pipelines, production-grade
+hosting and distributed quotas, online evaluation, persisted regression policy, and automatic
+deployment gates remain out of scope.
