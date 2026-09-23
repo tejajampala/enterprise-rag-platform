@@ -1,4 +1,4 @@
-# Phase 2 architecture
+# Architecture reference
 
 ## Runtime boundaries
 
@@ -20,14 +20,14 @@ RAGPipeline.answer
 region, and MLflow destinations come from typed `config.py` settings. Provider protocols continue
 to isolate Hugging Face embeddings/reranking and Bedrock generation.
 
-Qdrant remains the only retrieval database. PostgreSQL also has a separate, optional Phase 3
-application database; it never shares MLflow's database or metadata tables. The initial application
-schema records managed corpora, ingestion attempts, stable logical documents, immutable document
-versions and chunks, per-run document classifications, and immutable Qdrant index generations with
-their chunk membership. Application UUIDs connect versions across the existing content-derived
-compatibility IDs. This milestone advances lineage persistence only: change classification
-planning and the transactional lineage write path are implemented, followed by explicit managed
-generation publication, activation, vector reuse, BM25 lifecycle management, and retrieval.
+Qdrant remains the only retrieval data plane. The managed profile also uses a separate PostgreSQL
+control plane; it never shares MLflow's database or metadata tables. The application schema records
+managed corpora, ingestion attempts, stable logical documents, immutable document versions and
+chunks, per-run change classifications, derived PII classifications, and immutable Qdrant index
+generations with chunk membership and restoration provenance. Application UUIDs connect versions
+across the existing content-derived compatibility IDs. Explicit services implement change
+planning, transactional lineage persistence, immutable generation publication and activation,
+vector/BM25 reuse, generation-pinned retrieval, validation, cleanup planning, and restoration.
 
 The managed-ingestion write boundary is deliberately small:
 
@@ -97,15 +97,16 @@ appends one immutable version and chunks. `UNCHANGED` records observation and ad
 `DELETED` soft-deletes the logical document without removing history. A deleted source that
 reappears is explicitly unsupported rather than violating the corpus/source uniqueness rule.
 Snapshot hashes use versioned canonical JSON (`managed-snapshot-v1`) over sorted source keys and
-their content/metadata/version hashes. Advisory locking and restoration semantics are deferred.
+their content/metadata/version hashes. Concurrent lineage-apply locking remains deferred;
+publication and restoration use short corpus-row locks for generation allocation and ACTIVE
+switching.
 
 The configured Qdrant prefix is registration metadata only. Apply never creates `index_states` or
 `index_state_chunks`, calls Qdrant, calculates embeddings, or writes BM25 state. Retrieval therefore
 continues to use the unchanged Phase 1/Phase 2 indexes.
 
-The managed-index persistence foundation defines immutable generation metadata without publishing
-an index yet. PostgreSQL is the future activation authority and permits only these first-version
-transitions:
+The managed-index persistence layer defines immutable generation metadata, and PostgreSQL is the
+activation authority. Publication and restoration use these transitions:
 
 ```text
 BUILDING -> READY -> ACTIVE -> RETIRED
@@ -116,17 +117,13 @@ BUILDING -> READY -> ACTIVE -> RETIRED
 `BUILDING` may temporarily lack an embedding dimension, BM25 state, or canonical index
 configuration. A generation cannot become `READY` until those values and their deterministic
 hashes are present. The complete BM25 query-encoder state is stored as generation-specific JSONB
-(portable JSON in SQLite tests), so future runtime resolution can obtain the physical collection
-and matching lexical encoder from one ACTIVE PostgreSQL row. One ingestion snapshot may own
-multiple generation attempts, while a partial unique index permits only one ACTIVE generation per
-corpus. Generation-number allocation still requires a future explicit locked transaction.
+(portable JSON in SQLite tests), so runtime resolution obtains the physical collection and matching
+lexical encoder from one ACTIVE PostgreSQL row. One ingestion snapshot may own multiple generation
+attempts, while a partial unique index permits only one ACTIVE generation per corpus. Generation
+numbers are allocated under a corpus-row lock. The existing Phase 1 fixture and Phase 2 evaluation
+indexing/retrieval paths remain independent.
 
-This milestone does not create, retrieve, validate, or mutate Qdrant collections; does not run
-embedding inference; and does not activate a managed generation. The existing Phase 1 fixture and
-Phase 2 evaluation indexing/retrieval paths remain independent.
-
-The next managed-index input boundary resolves the exact active textual corpus before any index
-work begins:
+The managed-index input boundary resolves the exact active textual corpus before index work:
 
 ```text
 ACTIVE logical documents
@@ -144,7 +141,7 @@ validate existing derivation or transactionally materialize it
 ActiveChunkManifest
         |
         v
-future BM25 + dense embedding + Qdrant generation
+BM25 + dense embedding + Qdrant generation
 ```
 
 `ChunkMaterializationService` reconstructs the existing domain `Document`, verifies normalized
@@ -164,7 +161,7 @@ derived from the actual active latest versions (and must equal a latest authorit
 snapshot), which also handles cumulative non-authoritative observations safely. This boundary
 still creates no index state, BM25 state, embedding, Qdrant collection, or generation publication.
 
-BM25 preparation is the next pure planning boundary:
+BM25 preparation is a pure planning boundary:
 
 ```text
 ActiveChunkManifest
@@ -180,7 +177,7 @@ plan_bm25_generation (BM25 planner)
  verified complete BM25State
          |
          v
- future managed Qdrant publisher
+ managed Qdrant publisher
 ```
 
 BM25 statistics are corpus-wide: vocabulary, document frequencies, indexed-document count, and
@@ -217,7 +214,7 @@ ActiveChunkManifest + previous ACTIVE generation
         complete prepared dense-vector plan
                          |
                          v
-                 future publisher
+                 managed publisher
 ```
 
 Dense reuse is per chunk because an embedding is dependent on exact text and the complete
@@ -225,9 +222,11 @@ embedding fingerprint, not on the rest of the corpus. The planner considers only
 the supplied previous ACTIVE generation, chooses duplicate exact-text candidates deterministically,
 and reads their stored Qdrant point IDs in bounded batches. It reuses a vector only after checking
 the returned point/payload lineage, hash, exact text, dimension, and finite values. A missing or
-unusable individual old point is recomputed; a Qdrant read failure aborts planning. New embeddings
-are requested once for only the non-reused texts. The plan preserves manifest order and records
-the prior chunk and point provenance for every reuse.
+unusable individual old point is recomputed. Recognized transient Qdrant transport/readiness
+failures receive bounded retry/backoff; non-transient integrity errors and exhausted infrastructure
+reads abort planning rather than silently recomputing. New embeddings are requested once for only
+the non-reused texts. The plan preserves manifest order and records the prior chunk and point
+provenance for every reuse.
 
 This differs deliberately from BM25: dense vectors are text/model dependent and can be reused for
 surviving exact chunks after metadata or chunking changes, while BM25 statistics are corpus
@@ -246,7 +245,7 @@ ActiveChunkManifest + DenseGenerationPlan + BM25GenerationPlan
              complete immutable point inputs
                               |
                               v
-                future ManagedIndexService
+                    ManagedIndexService
 ```
 
 The preparation layer validates that manifest, dense plan, BM25 plan, and generation identity all
@@ -798,15 +797,18 @@ only for legacy type detection and never routes a request.
 
 ## Infrastructure
 
-Docker Compose owns three services:
+Docker Compose owns four services:
 
 - Qdrant 1.19 for dense and sparse retrieval.
 - PostgreSQL 17 on the internal Compose network for MLflow metadata, traces, runs, and Evaluation
   Dataset state.
+- A separate PostgreSQL 17 service, exposed only on `127.0.0.1:5433`, for managed application
+  lineage and generation state.
 - MLflow 3.16 on port 5000, with PostgreSQL backend and a local Docker artifact volume.
 
-PostgreSQL is intentionally not exposed to the host. Credentials enter Compose through `.env` and
-are not committed. Qdrant and MLflow have health checks; MLflow waits for PostgreSQL health.
+MLflow's PostgreSQL is intentionally not exposed to the host. Qdrant, lineage PostgreSQL, and
+MLflow bind their host ports to loopback. Credentials enter Compose through `.env` and are not
+committed. Every service has a health check, and MLflow waits for its PostgreSQL backend health.
 
 ## Corpus strategy
 
@@ -847,8 +849,8 @@ RRF -> reranker -> authorized contexts
 `DocumentAccessPolicy` supports `PUBLIC` and group-based `RESTRICTED` content. Group identifiers
 are trimmed, case-folded, deduplicated, and sorted for persistence and hashing; empty identifiers,
 restricted policies without groups, and public policies with groups are rejected. PostgreSQL stores
-`access_visibility` and `allowed_groups` on each immutable `document_versions` row. The v0003
-migration assigns existing rows the backward-compatible `PUBLIC` policy.
+`access_visibility` and `allowed_groups` on each immutable `document_versions` row. Migration
+`0003_access_policy` assigns existing rows the backward-compatible `PUBLIC` policy.
 
 Chunks inherit their owning document version's policy. Managed payload schema v3 serializes the
 explicit `access_visibility` and sorted `allowed_groups`; no principal identity or secret is

@@ -10,7 +10,7 @@ debt collection, and payments/fraud. It is paraphrased from the linked CFPB page
 offline development and tests; it is not legal or financial advice. A separate manifest-driven
 workflow can fetch a larger official CFPB evaluation corpus without committing downloads.
 
-## Phase 2 architecture
+## System architecture
 
 ```text
 CFPB fixture / bounded CFPB manifest acquisition
@@ -35,16 +35,16 @@ Provider protocols keep embeddings, reranking, and generation configurable. Qdra
 only retrieval engine, Bedrock remains only the generation gateway, MLflow is the observability
 and experiment system, and Streamlit remains presentation. No orchestration framework is used.
 
-### Optional Phase 3 application database foundation
+### Managed application control plane
 
-Phase 3 adds an optional SQLAlchemy/Alembic foundation for a separate application lineage
-database. The `lineage-postgres` Docker service uses its own credentials, database, localhost-only
-port, and volume; it does not reuse MLflow's PostgreSQL database. Set `RAG__DATABASE__URL` only
-when running Phase 3 database operations. Fixture ingestion, deterministic evaluation, retrieval,
-and normal application startup remain database-independent. The lineage schema, repository,
-pure change planner, and first transactional lineage write path are present. This write path records
-source observations and immutable versions. The explicit managed publisher creates immutable
-Qdrant/BM25 generations, and the managed runtime resolves one ACTIVE generation.
+The managed profile uses SQLAlchemy/Alembic with a separate application-lineage database. The
+`lineage-postgres` Docker service has its own credentials, database, localhost-only port, and
+volume; it does not reuse MLflow's PostgreSQL database. `RAG__DATABASE__URL` is required for the
+managed profile and its operator commands, but fixture and evaluation ingestion/retrieval remain
+database-independent. PostgreSQL records source observations, immutable versions and chunks,
+derived governance metadata, immutable index generations, memberships, and activation state. The
+explicit publisher creates immutable Qdrant/BM25 generations, and each managed runtime resolves
+and pins one ACTIVE generation.
 
 ### Retrieval foundations
 
@@ -116,8 +116,8 @@ inaccessible, and REDACT-mode text changes do not affect identity scoring.
 An MLflow **run** represents an evaluation experiment. It records model/config parameters,
 aggregate metrics, Git SHA, and report artifacts. Traces explain individual executions; runs make
 whole experiments comparable. PostgreSQL is the MLflow backend because MLflow Evaluation
-Datasets require a database-backed tracking server. It is not the application's document-lineage
-database; that remains Phase 3.
+Datasets require a database-backed tracking server. It is separate from the managed application's
+document-lineage database.
 
 Deterministic retrieval evaluation needs no LLM and compares dense, sparse/BM25, RRF fused, and
 reranked output from the existing `retrieve_debug()` path. Generation evaluation is separate and
@@ -645,6 +645,8 @@ uv run ruff check .
 uv run mypy .
 uv run pytest
 docker compose config --quiet
+git diff --check
+uv run alembic heads
 ```
 
 Run the focused Phase 3 two-generation lifecycle regression with:
@@ -672,7 +674,7 @@ repeatable. Production/online evaluation observes real traffic and feedback unde
 operational controls. Phase 2 implements offline experiments and production-path traces but does
 not claim production monitoring, quality gains, or release thresholds.
 
-Phase 3 currently provides the application PostgreSQL schema, deterministic planning,
+The managed Phase 3 path provides the application PostgreSQL schema, deterministic planning,
 transactional lineage/version persistence, an explicit immutable managed-index publisher, and an
 explicit generation-pinned managed runtime profile with public/group Qdrant pre-filtering, plus
 operator status, bounded/deep validation, retention planning, and confirmed physical cleanup.
@@ -683,7 +685,9 @@ classification, production
 deployment, and formal release thresholds remain future work. Kafka, Airflow, Kubernetes,
 Supabase, OpenSearch, and additional orchestration frameworks remain out of scope.
 
-See [architecture details](docs/architecture.md) and the
-[Phase 2 interview notes](docs/phase2-interview-notes.md). The first expanded-corpus run and its
-non-significant sanity analysis are recorded in
+Start with the [end-to-end demo runbook](docs/end-to-end-demo.md) and the
+[system-design walkthrough](docs/system-design-walkthrough.md). The detailed implementation
+reference is in [architecture details](docs/architecture.md); historical Phase 2 design context is
+in the [Phase 2 interview notes](docs/phase2-interview-notes.md), and the first expanded-corpus run
+and its non-significant sanity analysis are recorded in
 [Phase 2 deterministic validation](docs/phase2-validation.md).
