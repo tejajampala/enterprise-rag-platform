@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+from consumer_finance_rag.access import AccessContext
 from consumer_finance_rag.context import ContextBuilder
 from consumer_finance_rag.models import ModelMetadata, RAGResponse
 from consumer_finance_rag.observability import NoOpTracer, Tracer
+from consumer_finance_rag.pii import PIIHandlingPolicy
 from consumer_finance_rag.prompts import SYSTEM_PROMPT, build_user_prompt
 from consumer_finance_rag.providers import EmbeddingProvider, LLMProvider, RerankerProvider
 from consumer_finance_rag.retrieval import HybridRetrievalService
@@ -30,7 +32,13 @@ class RAGPipeline:
         self.tracer = tracer or NoOpTracer()
         self.trace_attributes = trace_attributes or {}
 
-    def answer(self, question: str) -> RAGResponse:
+    def answer(
+        self,
+        question: str,
+        *,
+        access_context: AccessContext | None = None,
+        pii_policy: PIIHandlingPolicy | None = None,
+    ) -> RAGResponse:
         attributes: dict[str, object] = {
             "embedding.model": self.embedding_provider.model_name,
             "reranker.model": self.reranker.model_name,
@@ -39,8 +47,12 @@ class RAGPipeline:
             **self.trace_attributes,
         }
         with self.tracer.span("rag_request", span_type="CHAIN", attributes=attributes) as span:
-            span.set_inputs({"question": question})
-            retrieval_result = self.retrieval.retrieve(question)
+            span.set_inputs({"query_characters": len(question)})
+            retrieval_result = self.retrieval.retrieve(
+                question,
+                access_context=access_context,
+                pii_policy=pii_policy,
+            )
             context = self.context_builder.build(retrieval_result.chunks)
             result = self.llm.generate(SYSTEM_PROMPT, build_user_prompt(question, context.text))
             response = RAGResponse(
@@ -68,8 +80,8 @@ class RAGPipeline:
             )
             span.set_outputs(
                 {
-                    "answer": response.answer,
-                    "citations": [item.model_dump() for item in response.citations],
+                    "answer_characters": len(response.answer),
+                    "citation_count": len(response.citations),
                 }
             )
             return response

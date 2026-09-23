@@ -10,7 +10,7 @@ debt collection, and payments/fraud. It is paraphrased from the linked CFPB page
 offline development and tests; it is not legal or financial advice. A separate manifest-driven
 workflow can fetch a larger official CFPB evaluation corpus without committing downloads.
 
-## Phase 2 architecture
+## System architecture
 
 ```text
 CFPB fixture / bounded CFPB manifest acquisition
@@ -34,6 +34,17 @@ Docker: Qdrant | PostgreSQL (MLflow backend) | MLflow Tracking Server
 Provider protocols keep embeddings, reranking, and generation configurable. Qdrant remains the
 only retrieval engine, Bedrock remains only the generation gateway, MLflow is the observability
 and experiment system, and Streamlit remains presentation. No orchestration framework is used.
+
+### Managed application control plane
+
+The managed profile uses SQLAlchemy/Alembic with a separate application-lineage database. The
+`lineage-postgres` Docker service has its own credentials, database, localhost-only port, and
+volume; it does not reuse MLflow's PostgreSQL database. `RAG__DATABASE__URL` is required for the
+managed profile and its operator commands, but fixture and evaluation ingestion/retrieval remain
+database-independent. PostgreSQL records source observations, immutable versions and chunks,
+derived governance metadata, immutable index generations, memberships, and activation state. The
+explicit publisher creates immutable Qdrant/BM25 generations, and each managed runtime resolves
+and pins one ACTIVE generation.
 
 ### Retrieval foundations
 
@@ -74,15 +85,39 @@ allowed by application code.
 
 An MLflow **trace** represents one production RAG request. Its nested **spans** represent the
 embedding, dense HNSW search, sparse BM25 search, RRF, reranking, context construction, and
-Bedrock call. Span duration supplies stage latency without a second timing subsystem. Compact IDs,
-ranks, models, retrieval parameters, token usage, stop reason, and AWS request ID are recorded;
-dense vectors and unnecessary full payloads are not.
+Bedrock call. Retrieval spans record safe counts, ranks, scores, model/configuration identity, and
+stage structure. Raw queries, chunk/document text, titles, source URLs, principals, and access-group
+names are omitted. Bedrock token usage, stop reason, and AWS request ID remain available without
+recording prompts.
+
+Phase 3 managed retrieval also emits one immutable `RetrievalMetrics` event when each request
+finishes or fails. It includes the runtime-pinned `index_state_id`, generation, collection, profile,
+stage latencies, candidate/final counts, ACL mode and rejection count, caller group count, PII
+policy and aggregate PII type/redaction counts, and a bounded failure stage. It never contains raw
+query or chunk text, matched PII values, principal identity, group names, credentials, or exception
+messages. Fixture and evaluation traces use their real profile/collection but leave generation and
+index-state fields null.
+
+`RetrievalTelemetrySink` defaults to an in-process no-op, so no external monitoring service is
+required. `StructuredLoggingRetrievalTelemetrySink` is an opt-in Python logging implementation
+that emits a JSON allowlist. `MLflowRetrievalTelemetrySink` can append the same aggregate-safe
+request data to a caller-supplied active MLflow run; it never creates a run per query, and MLflow
+failures degrade to a no-op. Prometheus, OpenTelemetry, Datadog, CloudWatch, and other remote
+backends remain deferred.
+
+Managed retrieval quality is measured separately with deterministic golden cases. `RetrievalMetrics`
+is operational telemetry for one request; `RetrievalQualityReport` is a controlled, offline report
+for one generation-pinned `ManagedRetrievalRuntime`. The report scores stable source, document, or
+chunk identity with Recall@K, hit rate, expected rank, and MRR. It includes generation/index
+fingerprints and retrieval settings, but excludes queries, context text, payload metadata,
+principals, and access-group names. Explicit ACL-negative cases pass when protected content stays
+inaccessible, and REDACT-mode text changes do not affect identity scoring.
 
 An MLflow **run** represents an evaluation experiment. It records model/config parameters,
 aggregate metrics, Git SHA, and report artifacts. Traces explain individual executions; runs make
 whole experiments comparable. PostgreSQL is the MLflow backend because MLflow Evaluation
-Datasets require a database-backed tracking server. It is not the application's document-lineage
-database; that remains Phase 3.
+Datasets require a database-backed tracking server. It is separate from the managed application's
+document-lineage database.
 
 Deterministic retrieval evaluation needs no LLM and compares dense, sparse/BM25, RRF fused, and
 reranked output from the existing `retrieve_debug()` path. Generation evaluation is separate and
@@ -135,6 +170,352 @@ Open Streamlit at its displayed URL and MLflow at <http://localhost:5000>. Boto3
 AWS credential chain; never commit access keys. If Bedrock is not configured, the UI displays an
 actionable message rather than calling AWS.
 
+### Local startup and operations runbook
+
+For a fresh Windows/PowerShell environment, copy the example rather than committing local
+credentials, edit `.env`, and start the existing persistent services:
+
+```powershell
+uv sync
+Copy-Item .env.example .env
+# Edit .env: select the runtime profile and replace local database passwords.
+docker compose up -d
+```
+
+For managed mode, initialize the lineage schema and explicitly create content/index state only
+when needed. None of these write operations run during application startup or preflight:
+
+```powershell
+uv run alembic upgrade head
+uv run python scripts/ingest_incremental.py --mode fixture --apply
+uv run python scripts/index_managed.py --publish
+uv run python scripts/check_environment.py --managed-smoke
+```
+
+For fixture mode, fixture indexing is likewise explicit:
+
+```powershell
+uv run python scripts/ingest.py --mode fixture
+uv run python scripts/check_environment.py
+```
+
+Then launch only the application surfaces required locally:
+
+```powershell
+uv run streamlit run app/streamlit_app.py --server.address 127.0.0.1
+uv run streamlit run app/operations_dashboard.py --server.address 127.0.0.1
+```
+
+For an existing environment, preserve the named volumes and use the shorter read-first path:
+
+```powershell
+docker compose up -d
+uv run alembic current
+uv run alembic heads
+uv run python scripts/check_environment.py --managed-smoke
+uv run streamlit run app/streamlit_app.py --server.address 127.0.0.1
+```
+
+Never run `docker compose down -v` when PostgreSQL, Qdrant, or MLflow data must be preserved. A
+normal `docker compose down` keeps the named volumes; `-v` removes them. Qdrant, MLflow, and the
+lineage PostgreSQL host ports keep their documented numbers but bind to `127.0.0.1` for local-only
+access. The MLflow PostgreSQL service remains separate from lineage PostgreSQL and is not published
+to the host.
+
+`scripts/check_environment.py` is a read-only selected-profile preflight. It validates safe
+configuration, service connectivity, and migration compatibility without loading embeddings,
+rerankers, Bedrock, judges, or evaluation code. Fixture and evaluation profiles never initialize
+lineage PostgreSQL. Managed preflight uses bounded validation; because it does not scan payloads,
+it reports a warning directing the operator to the explicit deep smoke command:
+
+```powershell
+uv run python scripts/check_environment.py --managed-smoke
+```
+
+The managed smoke remains model-free and read-only, but deep-validates ACTIVE payload/ACL/PII
+compatibility and reports the ACTIVE generation, collection existence, PostgreSQL memberships,
+Qdrant points, ACTIVE validation, and historical audit separately. `PASS_WITH_WARNINGS` is
+serving-ready because ACTIVE is valid; legacy RETIRED or incomplete FAILED history stays visible.
+An ACTIVE `FAIL`, missing/ambiguous ACTIVE, migration mismatch, count mismatch, or unavailable
+required service produces `NOT_READY`. An actual live query is a separate explicit action through
+the Streamlit application and may initialize Hugging Face models and call Bedrock; preflight and
+managed smoke never do so.
+
+Common local troubleshooting:
+
+- PostgreSQL authentication failures often mean the password in `.env` no longer matches the
+  credentials stored when the persistent volume was first initialized. Restore the original local
+  credential or perform an intentional database recovery; do not erase the volume as a shortcut.
+- On Windows, `localhost` may resolve through IPv6 or a proxy while Docker ports are bound on IPv4.
+  If a local connection fails, use `127.0.0.1` consistently in PostgreSQL, Qdrant, and MLflow URLs.
+- For Qdrant connection failures, check `docker compose ps`, the Qdrant health status, and that
+  another process is not using ports 6333/6334. Preflight never creates a missing collection.
+- A migration compatibility failure is repaired only by the explicit operator command
+  `uv run alembic upgrade head`; application startup and health checks never migrate automatically.
+- MLflow is optional. Invalid optional configuration is a warning and does not turn a healthy
+  retrieval runtime into a failed readiness result.
+
+Previous-ACTIVE dense-vector reads use a bounded retry only for transport, connection, timeout,
+rate-limit, and temporary service-readiness errors. Attempts and base backoff are configurable with
+`RAG__MANAGED_INDEX__DENSE_REUSE_READ_MAX_ATTEMPTS` and
+`RAG__MANAGED_INDEX__DENSE_REUSE_READ_BACKOFF_SECONDS`. Integrity errors are not retried, and an
+exhausted infrastructure read aborts publication rather than silently recomputing embeddings.
+
+### Phase 3 managed-ingestion planning and lineage apply
+
+After configuring `RAG__DATABASE__URL` and applying the application migration with
+`uv run alembic upgrade head`, inspect a deterministic plan without writing it:
+
+```bash
+uv run python scripts/ingest_incremental.py --mode fixture
+uv run python scripts/ingest_incremental.py --mode evaluation --authoritative-snapshot --details
+```
+
+Persist exactly that plan to the application lineage database by adding `--apply`:
+
+```bash
+uv run python scripts/ingest_incremental.py --mode fixture --apply
+uv run python scripts/ingest_incremental.py --mode evaluation --authoritative-snapshot --apply
+```
+
+Fixture mode uses only the six stable fixture documents. Evaluation mode requires the existing
+downloaded expanded corpus and combines it with the fixture using the production corpus assembler.
+Without `--apply`, the command remains strictly read-only. With `--apply`, it writes only managed
+corpus registration, ingestion runs, logical documents, immutable document versions/chunks, and
+per-run classifications. The authoritative flag is required before absence can be marked deleted.
+Deleted sources are retained with all history; reappearance is rejected clearly until restoration
+semantics are designed.
+
+An apply creates and commits its `RUNNING` audit row first. All document/version/chunk/classification
+mutations and the final `SUCCEEDED` or `NOOP` transition then share one transaction. If that
+transaction fails, it is rolled back and the run is marked `FAILED` in a separate transaction.
+Concurrent-apply locking is deferred. Neither mode updates Qdrant, embeddings, or BM25, so an apply
+must not be interpreted as a retrieval-index update.
+
+Publish the persisted lineage into an immutable managed hybrid-index generation as a separate,
+explicit operator step:
+
+```bash
+uv run python scripts/ingest_incremental.py --mode evaluation --authoritative-snapshot --apply
+uv run python scripts/index_managed.py --publish
+```
+
+The first command acquires/assembles the configured corpus and persists source lineage. The second
+command does not reacquire sources: it resolves the latest successful/no-op lineage run,
+transactionally materializes the configured active chunk derivation, commits that transaction,
+and then delegates publication to `ManagedIndexService`. Running `scripts/index_managed.py`
+without `--publish` is a cheap, read-only PostgreSQL status check; `--details` adds persisted
+identity/count information without contacting Qdrant or loading the embedding model.
+
+Publication creates a new immutable managed Qdrant generation only when lineage or index
+configuration requires it. Repeating publication with unchanged lineage/configuration returns
+`NO_INDEX_CHANGE`.
+
+### Operate managed generations
+
+PostgreSQL remains the control-plane authority and retains every generation, membership, source,
+version, chunk, ACL, and PII history row. Operators can inspect and validate that history against
+the physical Qdrant data plane without loading application models:
+
+```bash
+uv run python scripts/manage_index_generations.py --status
+uv run python scripts/manage_index_generations.py --validate
+uv run python scripts/manage_index_generations.py --validate --deep
+uv run python scripts/manage_index_generations.py --cleanup-plan
+```
+
+Normal validation is bounded to persisted metadata, hashes, collection configuration, exact point
+counts, and membership counts. `--deep` is intentionally explicit because it scrolls every point
+to verify generation/lineage identities, point IDs, payload schema, ACL fields, PII fields,
+chunking identity, and vector presence.
+
+Validation reports ACTIVE serving health separately from the historical audit. The unique ACTIVE
+generation still must satisfy every current configuration, BM25, membership, physical-count,
+ACL, and PII invariant; any failure produces overall `FAIL`. If ACTIVE passes while RETIRED legacy
+metadata, cleaned history, FAILED partial builds, or historical corruption is present, the result
+is `PASS_WITH_WARNINGS` and every generation-level finding remains visible. A RETIRED schema that
+the current validator cannot safely interpret is marked `HISTORICAL_SCHEMA_INCOMPATIBLE`, never
+claimed as verified or upgraded, and remains ineligible for restoration. FAILED intended counts
+are retained as build history; zero or partial memberships and absent storage are informational
+historical findings rather than serving-index failures.
+
+For a separate read-only visual view, launch the operator dashboard locally:
+
+```bash
+uv run streamlit run app/operations_dashboard.py --server.address 127.0.0.1
+```
+
+The dashboard lazily reads platform health, generation history, bounded or explicitly requested
+deep validation, cleanup classifications, restoration provenance, safe retrieval-quality reports,
+and optional MLflow experiment availability. It has no cleanup, restoration, publication,
+deletion, or status-change controls and does not initialize embedding, reranker, Bedrock, or judge
+models. It displays only allowlisted metadata—never database/Qdrant connection strings, raw
+queries, source or chunk text, payloads, PII values, principals, access groups, or credentials.
+This is not an authenticated production administration console: run it locally as shown, or place
+it behind appropriate external authentication and network controls.
+
+Platform Health presents `ACTIVE validation` independently from `Historical audit`, so historical
+warnings do not imply that a healthy current serving generation is unavailable. The generation
+integrity table retains the warning or failure classification for each historical generation.
+
+Cleanup planning is read-only. Physical deletion requires both flags:
+
+```bash
+uv run python scripts/manage_index_generations.py --cleanup --confirm
+```
+
+Without `--confirm`, `--cleanup` only prints the plan. ACTIVE, READY, and BUILDING generations are
+never eligible. The newest `managed_index.retained_retired_generations` RETIRED generations are
+protected, and older RETIRED generations must exceed
+`managed_index.retired_cleanup_min_age_hours`. Defaults are two retained generations and 24 hours.
+FAILED physical collections may be cleaned conservatively after a locked authoritative status
+re-check; missing FAILED collections are normal. Canonically named orphan collections are reported
+but not deleted. Phase 1 and evaluation collections are never considered managed cleanup targets.
+
+The minimum age is a grace period for generation-pinned older processes, not proof that no process
+still uses the collection and not a distributed runtime lease. Each deletion re-locks/re-reads the
+corpus and recomputes eligibility to avoid deleting from a stale plan. Cleanup removes only an
+eligible Qdrant collection; PostgreSQL history remains immutable. Deleting a RETIRED physical
+collection removes simple restoration capability for that generation, although its PostgreSQL
+audit history remains. Retention and minimum-age policy remain operator choices.
+
+Restore a historical, still-present RETIRED generation with the same operations CLI. The first
+command is a mutation-free plan; the second explicitly confirms collection creation and the
+traffic switch:
+
+```bash
+uv run python scripts/manage_index_generations.py --restore-generation 1
+uv run python scripts/manage_index_generations.py --restore-generation 1 --confirm
+```
+
+Restoration never performs `RETIRED -> ACTIVE`. It validates the historical metadata, membership,
+BM25 state/hash, collection shape, every point, ACL/PII payload, and current query-embedding
+compatibility, then creates a new monotonic generation and immutable collection. Dense vectors,
+sparse vectors, text, ACL/PII metadata, and the historical BM25/configuration identity are copied;
+no embedding, reranker, LLM, PII detector, source acquisition, or BM25 fit runs. The copied point
+payload retains historical content/provenance and changes only `index_generation` and
+`index_state_id` for the new physical generation.
+
+The source must be `RETIRED`; `BUILDING`, `READY`, `FAILED`, and `ACTIVE` sources are rejected. Its
+canonical physical collection must still exist, so restoration from cleaned PostgreSQL-only
+history is future rebuild-from-history work. The final corpus-locked transaction aborts if ACTIVE
+changed after planning, retires only the expected ACTIVE generation, and activates the READY
+candidate. The new `index_states.restored_from_index_state_id` self-reference and
+`restoration_reason` record audit provenance. Source lineage, ingestion runs, document versions,
+chunks, ACL policy, and PII classification are not rolled back or recreated; consequently source
+lineage may describe newer content than the restored serving index.
+
+### Select the runtime retrieval profile
+
+The application profile is explicit and defaults to the existing Phase 1 fixture path. Set one of
+these values in `.env`, then start Streamlit normally:
+
+```dotenv
+RAG__RUNTIME__PROFILE=fixture
+```
+
+```dotenv
+RAG__RUNTIME__PROFILE=evaluation
+```
+
+```dotenv
+RAG__RUNTIME__PROFILE=managed
+```
+
+`fixture` uses `consumer_finance_phase1` and `data/index/bm25_state.json`. `evaluation` uses
+`consumer_finance_evaluation` and `data/index/evaluation_bm25_state.json`. These static profiles
+remain independent of the application lineage database.
+
+`managed` requires `RAG__DATABASE__URL`, completed application migrations, persisted lineage, and
+an ACTIVE generation published by `scripts/index_managed.py --publish`. PostgreSQL resolves the
+Qdrant collection and matching persisted BM25 state together. Streamlit displays the pinned
+generation and collection. It never silently falls back to fixture when managed startup fails.
+If another generation becomes ACTIVE while the process is running, the current process remains
+pinned to its original collection/BM25 pair; restart the application to resolve the new ACTIVE
+generation. Automatic polling and hot reload are not implemented.
+
+### Managed retrieval access control
+
+Managed document versions carry an immutable `DocumentAccessPolicy`. Existing sources default to
+`PUBLIC`; a restricted source names one or more normalized groups. Authentication is deliberately
+outside this milestone: the caller supplies an already-resolved, request-scoped `AccessContext`.
+For example:
+
+```python
+from consumer_finance_rag.access import AccessContext
+
+result = managed_runtime.retrieval_service.retrieve(
+    "How should this fraud case be handled?",
+    access_context=AccessContext(
+        principal_id="user-123",
+        groups=frozenset({"fraud-analysts", "au-employees"}),
+    ),
+)
+```
+
+The same Qdrant authorization filter is applied before both dense and sparse candidate search.
+Missing access context is fail-safe and means public-only; it never means unrestricted. Phase 1
+fixture and Phase 2 evaluation profiles remain unfiltered and accept their legacy payloads.
+
+An ACL-only source change creates a new immutable document version and managed generation because
+the Qdrant payload changed. When ordered chunk text is identical, the publisher reuses the BM25
+state and all eligible dense vectors. Old generation-pinned runtimes retain the historical ACL
+payload; newly constructed runtimes resolve the newly ACTIVE generation. This is group-based
+authorization metadata, not user/group storage or authentication.
+
+### Managed PII classification and redaction
+
+Managed indexing also applies a local, deterministic PII detector for `EMAIL`, practical AU and
+international `PHONE` values, checksum-valid Australian `AU_TFN` values, and Luhn-valid
+`CREDIT_CARD` values. It uses no external model, network service, or cloud DLP API. Detection
+results are derived governance metadata: PostgreSQL stores only detector version, classification
+hash, canonical PII types, and match count for each immutable document version. Raw detected
+values are not copied into classification metadata or logs, and original lineage/chunk text is
+never rewritten.
+
+Managed retrieval defaults to `REDACT`. ACL authorization is applied first, original authorized
+text is used internally for retrieval and reranking, and only then are final contexts transformed:
+
+```python
+from consumer_finance_rag.access import AccessContext
+from consumer_finance_rag.pii import PIIHandlingPolicy
+
+result = managed_runtime.retrieval_service.retrieve(
+    "How should this fraud case be handled?",
+    access_context=AccessContext(groups=frozenset({"fraud-analysts"})),
+    pii_policy=PIIHandlingPolicy.REDACT,  # managed default when omitted
+)
+```
+
+Redactions use typed placeholders such as `[REDACTED:EMAIL]` and
+`[REDACTED:CREDIT_CARD]`. A post-redaction local scan fails closed if a supported value remains.
+`ALLOW` must be requested explicitly and is independent of ACL group membership. Fixture and
+evaluation profiles retain their existing unredacted defaults.
+
+Detector identity is part of the managed index configuration, but not source-document identity.
+Changing detector versions persists another derived classification and publishes a new immutable
+generation while retaining the same source version. If text is unchanged, BM25 state and eligible
+dense vectors are reused. Managed payload schema v3 contains only safe coarse fields:
+`contains_pii`, sorted `pii_types`, and `pii_detector_version`.
+
+### Validate the complete Phase 3 lifecycle offline
+
+`tests/test_phase3_end_to_end.py` is the deterministic managed-lifecycle regression test. It uses
+SQLite, `QdrantClient(":memory:")`, small deterministic model doubles, and the real planner,
+lineage apply service, paragraph chunker, BM25 encoder, managed publisher, Qdrant adapter, managed
+runtime resolver, and hybrid retriever. No PostgreSQL server, Qdrant server, model download,
+network access, AWS, MLflow judge, or RAGAS call is required.
+
+```bash
+uv run pytest tests/test_phase3_end_to_end.py -q
+```
+
+The test publishes `g000001`, queries it, changes exactly one source through the transactional
+lineage path, publishes `g000002`, and proves dense reuse plus fresh computation, independent BM25
+refits, `g000001` retirement, `g000002` activation, process-lifetime runtime pinning, and a final
+`NO_INDEX_CHANGE`. Both immutable physical collections remain present. This validates explicit
+runtime reconstruction after publication; it does not implement or claim hot reload.
+
 ### Debug retrieval
 
 The developer CLI calls the production retrieval service but never Bedrock:
@@ -165,6 +546,28 @@ records corpus counts, model/index/retrieval parameters, stage metrics, category
 breakdowns, and JSON/CSV artifacts. CLI overrides such as `--dense-candidates`,
 `--sparse-candidates`, `--fused-candidates`,
 `--final-contexts`, and `--rrf-k` affect only that process and never rewrite configuration.
+
+To evaluate the currently ACTIVE managed generation through a runtime pinned once at startup:
+
+```bash
+uv run python scripts/evaluate_managed_retrieval.py --current
+uv run python scripts/evaluate_managed_retrieval.py --current --log-mlflow
+uv run python scripts/evaluate_managed_retrieval.py --current \
+  --output artifacts/retrieval_quality_current.json
+```
+
+This command reuses the Phase 2 seed cases and metric formulas, does not call Bedrock or an LLM
+judge, and does not require MLflow unless `--log-mlflow` is explicitly passed. The opt-in mode uses
+the configured evaluation experiment, logs safe generation/configuration parameters, aggregate
+quality metrics, and the versioned JSON artifact, then prints the MLflow run ID. Optional JSON uses
+`retrieval-quality-report-v1` and contains only generation/configuration identity, aggregate
+metrics, case IDs, safe retrieved identities, and per-case scores. The pure comparison helper
+reports metric deltas plus improved, regressed, newly missed, and newly recovered case IDs.
+Optional `max_recall_drop` and `max_mrr_drop` thresholds produce a side-effect-free PASS/FAIL
+result for CI; they do not publish, restore, or block a generation automatically. Operational
+`RetrievalMetrics` and offline `RetrievalQualityReport` logging remain separate, and neither
+adapter logs raw queries, retrieved context, matched PII values, principals, credentials, or group
+names.
 
 The CLI prints distinct embedding-load and reranker-load phases, warms each configured model once,
 then reports every case as it enters the unchanged `retrieve_debug()` production path. To download
@@ -232,17 +635,37 @@ precedence), prints document/chunk/category counts, and rebuilds the dedicated
 `consumer_finance_evaluation` hybrid collection. Fixture mode remains isolated in
 `consumer_finance_phase1`. Downloaded pages and parsed corpus JSON remain ignored by Git.
 
-## Development checks
+## Validation
+
+Run the complete local validation path with:
 
 ```bash
+uv sync
 uv run ruff check .
 uv run mypy .
 uv run pytest
-docker compose config
+docker compose config --quiet
+git diff --check
+uv run alembic heads
 ```
 
-Tests mock external systems and require no Qdrant server, MLflow server, internet, AWS credentials,
-or paid calls.
+Run the focused Phase 3 two-generation lifecycle regression with:
+
+```bash
+uv run pytest tests/test_phase3_end_to_end.py -v
+```
+
+The default test suite is deterministic and offline. It uses SQLite, in-memory Qdrant, and model
+doubles; it requires no `.env`, PostgreSQL/Qdrant/MLflow service, Hugging Face download, AWS
+credential, Bedrock call, MLflow judge, RAGAS judge, internet access, or paid operation.
+
+`.github/workflows/ci.yml` runs on every pull request and every push to `main`. It uses Python 3.12
+and `uv sync --frozen`, then runs Ruff, mypy, the complete pytest suite (including Phase 1/2
+compatibility, the Phase 3 lifecycle regression, and the SQLite Alembic upgrade/downgrade smoke
+test), Docker Compose configuration validation, and a clean-tree check. Repository branch
+protection should require the `CI / Offline validation` status check before merging to `main`.
+Migration execution on SQLite validates the current portable schema, but production PostgreSQL
+behavior still requires an operator-run migration against the target environment.
 
 ## Offline and online evaluation
 
@@ -251,12 +674,20 @@ repeatable. Production/online evaluation observes real traffic and feedback unde
 operational controls. Phase 2 implements offline experiments and production-path traces but does
 not claim production monitoring, quality gains, or release thresholds.
 
-Phase 3 correctly retains document lineage/versioning, incremental indexing, ACLs, PII handling,
-application PostgreSQL schema, production deployment, and formal CI regression gates. Kafka,
-Airflow, Kubernetes, Supabase, OpenSearch, and additional orchestration frameworks remain out of
-scope.
+The managed Phase 3 path provides the application PostgreSQL schema, deterministic planning,
+transactional lineage/version persistence, an explicit immutable managed-index publisher, and an
+explicit generation-pinned managed runtime profile with public/group Qdrant pre-filtering, plus
+operator status, bounded/deep validation, retention planning, and confirmed physical cleanup.
+It also supports validated restoration of a present RETIRED physical generation into a new
+immutable ACTIVE generation. Authentication, rebuild from cleaned history, automatic runtime
+reload, concurrent apply locking, in-place reactivation, runtime leases, semantic/LLM-based PII
+classification, production
+deployment, and formal release thresholds remain future work. Kafka, Airflow, Kubernetes,
+Supabase, OpenSearch, and additional orchestration frameworks remain out of scope.
 
-See [architecture details](docs/architecture.md) and the
-[Phase 2 interview notes](docs/phase2-interview-notes.md). The first expanded-corpus run and its
-non-significant sanity analysis are recorded in
+Start with the [end-to-end demo runbook](docs/end-to-end-demo.md) and the
+[system-design walkthrough](docs/system-design-walkthrough.md). The detailed implementation
+reference is in [architecture details](docs/architecture.md); historical Phase 2 design context is
+in the [Phase 2 interview notes](docs/phase2-interview-notes.md), and the first expanded-corpus run
+and its non-significant sanity analysis are recorded in
 [Phase 2 deterministic validation](docs/phase2-validation.md).

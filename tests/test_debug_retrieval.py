@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from collections.abc import Callable, Sequence
 
+from qdrant_client import models
+
 from consumer_finance_rag.config import RetrievalSettings
 from consumer_finance_rag.debug import format_retrieval_trace
 from consumer_finance_rag.factory import warm_up_retrieval_service
@@ -45,12 +47,25 @@ class DebugStore:
         self.dense = dense
         self.sparse = sparse
 
-    def search_dense(self, vector: list[float], limit: int) -> list[RetrievedChunk]:
+    def search_dense(
+        self,
+        vector: list[float],
+        limit: int,
+        *,
+        query_filter: models.Filter | None = None,
+    ) -> list[RetrievedChunk]:
+        del query_filter
         return self.dense[:limit]
 
     def search_sparse(
-        self, query: str, encoder: BM25SparseEncoder, limit: int
+        self,
+        query: str,
+        encoder: BM25SparseEncoder,
+        limit: int,
+        *,
+        query_filter: models.Filter | None = None,
     ) -> list[RetrievedChunk]:
+        del query_filter
         return self.sparse[:limit]
 
 

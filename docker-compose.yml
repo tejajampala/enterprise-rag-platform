@@ -2,8 +2,8 @@ services:
   qdrant:
     image: qdrant/qdrant:v1.19.0
     ports:
-      - "6333:6333"
-      - "6334:6334"
+      - "127.0.0.1:6333:6333"
+      - "127.0.0.1:6334:6334"
     volumes:
       - qdrant_data:/qdrant/storage
     healthcheck:
@@ -26,6 +26,22 @@ services:
       timeout: 5s
       retries: 10
 
+  lineage-postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: ${LINEAGE_DB_USER:?set LINEAGE_DB_USER in .env}
+      POSTGRES_PASSWORD: ${LINEAGE_DB_PASSWORD:?set LINEAGE_DB_PASSWORD in .env}
+      POSTGRES_DB: ${LINEAGE_DB_NAME:?set LINEAGE_DB_NAME in .env}
+    ports:
+      - "127.0.0.1:5433:5432"
+    volumes:
+      - lineage_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
   mlflow:
     build:
       context: .
@@ -42,7 +58,7 @@ services:
         --backend-store-uri="postgresql+psycopg://$${MLFLOW_DB_USER}:$${MLFLOW_DB_PASSWORD}@postgres:5432/$${MLFLOW_DB_NAME}"
         --artifacts-destination=/mlartifacts --serve-artifacts
     ports:
-      - "5000:5000"
+      - "127.0.0.1:5000:5000"
     volumes:
       - mlflow_artifacts:/mlartifacts
     depends_on:
@@ -61,5 +77,6 @@ services:
 volumes:
   qdrant_data:
   mlflow_postgres_data:
+  lineage_postgres_data:
   mlflow_artifacts:
 

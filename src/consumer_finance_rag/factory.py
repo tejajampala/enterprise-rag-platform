@@ -3,12 +3,31 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from dataclasses import dataclass, replace
 from pathlib import Path
+from typing import Literal
+from uuid import UUID
+
+from sqlalchemy.orm import Session
 
 from consumer_finance_rag.bedrock import BedrockLLMProvider
 from consumer_finance_rag.config import AppSettings
 from consumer_finance_rag.context import ContextBuilder
-from consumer_finance_rag.observability import Tracer, build_tracer
+from consumer_finance_rag.corpus import evaluation_runtime_settings
+from consumer_finance_rag.lineage.database import (
+    create_database_engine,
+    require_database_url,
+)
+from consumer_finance_rag.lineage.managed_retrieval import (
+    build_managed_retrieval_runtime,
+)
+from consumer_finance_rag.lineage.repository import LineageRepository
+from consumer_finance_rag.observability import (
+    RetrievalTelemetryContext,
+    RetrievalTelemetrySink,
+    Tracer,
+    build_tracer,
+)
 from consumer_finance_rag.pipeline import RAGPipeline
 from consumer_finance_rag.providers import (
     HuggingFaceEmbeddingProvider,
@@ -19,6 +38,41 @@ from consumer_finance_rag.sparse import BM25SparseEncoder
 from consumer_finance_rag.vector_store import QdrantHybridStore
 
 WarmupProgress = Callable[[str], None]
+RuntimeProfile = Literal["fixture", "evaluation", "managed"]
+
+
+@dataclass(frozen=True, slots=True)
+class RetrievalRuntime:
+    """Small profile-neutral runtime identity plus its pinned retrieval service."""
+
+    profile: RuntimeProfile
+    retrieval_service: HybridRetrievalService
+    qdrant_collection: str
+    generation: int | None = None
+    index_state_id: UUID | None = None
+
+    def display_metadata(self) -> tuple[tuple[str, str], ...]:
+        """Return only metadata appropriate for unobtrusive UI display."""
+
+        values: list[tuple[str, str]] = [("Retrieval profile", self.profile)]
+        if self.profile == "managed":
+            if self.generation is None or self.index_state_id is None:
+                raise ValueError("Managed retrieval metadata is incomplete")
+            values.extend(
+                [
+                    ("Generation", f"g{self.generation:06d}"),
+                    ("Collection", self.qdrant_collection),
+                ]
+            )
+        return tuple(values)
+
+
+@dataclass(frozen=True, slots=True)
+class ApplicationRuntime:
+    """Generation pipeline paired with its explicit retrieval runtime identity."""
+
+    retrieval: RetrievalRuntime
+    pipeline: RAGPipeline
 
 
 def build_retrieval_service(
@@ -26,6 +80,7 @@ def build_retrieval_service(
     *,
     bm25_state_path: str | Path = "data/index/bm25_state.json",
     tracer: Tracer | None = None,
+    telemetry_sink: RetrievalTelemetrySink | None = None,
 ) -> HybridRetrievalService:
     active_tracer = tracer or build_tracer(settings.mlflow)
     embedding = HuggingFaceEmbeddingProvider(
@@ -49,6 +104,81 @@ def build_retrieval_service(
         settings=settings.retrieval,
         tracer=active_tracer,
         collection_name=settings.qdrant.collection_name,
+        telemetry_context=RetrievalTelemetryContext(
+            profile=(
+                "evaluation"
+                if settings.runtime.profile == "evaluation"
+                else "fixture"
+            ),
+            qdrant_collection=settings.qdrant.collection_name,
+        ),
+        telemetry_sink=telemetry_sink,
+    )
+
+
+def build_runtime_retrieval(
+    settings: AppSettings,
+    *,
+    tracer: Tracer | None = None,
+    telemetry_sink: RetrievalTelemetrySink | None = None,
+) -> RetrievalRuntime:
+    """Dispatch explicitly without changing legacy fixture/evaluation builders."""
+
+    active_tracer = tracer or build_tracer(settings.mlflow)
+    profile = settings.runtime.profile
+    if profile == "fixture":
+        if telemetry_sink is None:
+            service = build_retrieval_service(settings, tracer=active_tracer)
+        else:
+            service = build_retrieval_service(
+                settings,
+                tracer=active_tracer,
+                telemetry_sink=telemetry_sink,
+            )
+        return RetrievalRuntime(
+            profile="fixture",
+            retrieval_service=service,
+            qdrant_collection=settings.qdrant.collection_name,
+        )
+    if profile == "evaluation":
+        evaluation_settings = evaluation_runtime_settings(settings)
+        if telemetry_sink is None:
+            service = build_retrieval_service(
+                evaluation_settings,
+                bm25_state_path=settings.evaluation.bm25_state_path,
+                tracer=active_tracer,
+            )
+        else:
+            service = build_retrieval_service(
+                evaluation_settings,
+                bm25_state_path=settings.evaluation.bm25_state_path,
+                tracer=active_tracer,
+                telemetry_sink=telemetry_sink,
+            )
+        return RetrievalRuntime(
+            profile="evaluation",
+            retrieval_service=service,
+            qdrant_collection=settings.evaluation.qdrant_collection_name,
+        )
+
+    require_database_url(settings.database)
+    engine = create_database_engine(settings.database)
+    try:
+        with Session(engine) as session:
+            managed = build_managed_retrieval_runtime(
+                settings,
+                LineageRepository(session),
+                tracer=active_tracer,
+                telemetry_sink=telemetry_sink,
+            )
+    finally:
+        engine.dispose()
+    return RetrievalRuntime(
+        profile="managed",
+        retrieval_service=managed.retrieval_service,
+        qdrant_collection=managed.qdrant_collection,
+        generation=managed.generation,
+        index_state_id=managed.index_state_id,
     )
 
 
@@ -77,6 +207,89 @@ def build_pipeline(
 ) -> RAGPipeline:
     tracer = build_tracer(settings.mlflow)
     retrieval = build_retrieval_service(settings, bm25_state_path=bm25_state_path, tracer=tracer)
+    return _compose_pipeline(
+        settings,
+        retrieval,
+        tracer=tracer,
+        qdrant_collection=settings.qdrant.collection_name,
+        hnsw_m=settings.qdrant.hnsw_m,
+        hnsw_ef_construct=settings.qdrant.hnsw_ef_construct,
+    )
+
+
+def build_application_runtime(
+    settings: AppSettings,
+    *,
+    retrieval_runtime: RetrievalRuntime | None = None,
+    telemetry_sink: RetrievalTelemetrySink | None = None,
+) -> ApplicationRuntime:
+    """Build the explicitly selected retrieval profile and backend-agnostic RAG pipeline."""
+
+    tracer = build_tracer(settings.mlflow)
+    if retrieval_runtime is None:
+        runtime = build_runtime_retrieval(
+            settings,
+            tracer=tracer,
+            telemetry_sink=telemetry_sink,
+        )
+    else:
+        service = _retrieval_with_tracer(
+            retrieval_runtime.retrieval_service,
+            tracer,
+            telemetry_sink=telemetry_sink,
+        )
+        runtime = replace(retrieval_runtime, retrieval_service=service)
+    managed = runtime.profile == "managed"
+    pipeline = _compose_pipeline(
+        settings,
+        runtime.retrieval_service,
+        tracer=tracer,
+        qdrant_collection=runtime.qdrant_collection,
+        hnsw_m=(settings.managed_index.hnsw_m if managed else settings.qdrant.hnsw_m),
+        hnsw_ef_construct=(
+            settings.managed_index.hnsw_ef_construct
+            if managed
+            else settings.qdrant.hnsw_ef_construct
+        ),
+    )
+    return ApplicationRuntime(retrieval=runtime, pipeline=pipeline)
+
+
+def _retrieval_with_tracer(
+    service: HybridRetrievalService,
+    tracer: Tracer,
+    *,
+    telemetry_sink: RetrievalTelemetrySink | None = None,
+) -> HybridRetrievalService:
+    """Reuse one pinned backend/model set while enabling request-time tracing."""
+
+    return HybridRetrievalService(
+        embedding_provider=service.embedding_provider,
+        reranker=service.reranker,
+        store=service.store,
+        sparse_encoder=service.sparse_encoder,
+        settings=service.settings,
+        tracer=tracer,
+        collection_name=service.collection_name,
+        access_control_enabled=service.access_control_enabled,
+        pii_handling_enabled=service.pii_handling_enabled,
+        pii_detector=service.pii_detector,
+        telemetry_context=service.telemetry_context,
+        telemetry_sink=telemetry_sink or service.telemetry_sink,
+    )
+
+
+def _compose_pipeline(
+    settings: AppSettings,
+    retrieval: HybridRetrievalService,
+    *,
+    tracer: Tracer,
+    qdrant_collection: str,
+    hnsw_m: int,
+    hnsw_ef_construct: int,
+) -> RAGPipeline:
+    """Inject a resolved retriever without exposing its persistence backend to RAG."""
+
     llm = BedrockLLMProvider(
         region=settings.aws.region,
         model_id=settings.models.generation.model,
@@ -98,9 +311,9 @@ def build_pipeline(
         reranker=retrieval.reranker,
         tracer=tracer,
         trace_attributes={
-            "qdrant.collection": settings.qdrant.collection_name,
-            "qdrant.hnsw_m": settings.qdrant.hnsw_m,
-            "qdrant.hnsw_ef_construct": settings.qdrant.hnsw_ef_construct,
+            "qdrant.collection": qdrant_collection,
+            "qdrant.hnsw_m": hnsw_m,
+            "qdrant.hnsw_ef_construct": hnsw_ef_construct,
             "retrieval.dense_candidate_limit": settings.retrieval.dense_candidates,
             "retrieval.sparse_candidate_limit": settings.retrieval.sparse_candidates,
             "retrieval.fused_candidate_limit": settings.retrieval.fused_candidates,

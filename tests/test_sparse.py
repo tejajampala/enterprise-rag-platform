@@ -1,10 +1,51 @@
 from __future__ import annotations
 
 import math
+from pathlib import Path
 
 import pytest
 
-from consumer_finance_rag.sparse import BM25SparseEncoder, bm25_corpus_hash, tokenize
+from consumer_finance_rag.sparse import (
+    BM25SparseEncoder,
+    bm25_corpus_hash,
+    bm25_state_from_json_dict,
+    bm25_state_hash,
+    bm25_state_to_json_dict,
+    canonical_bm25_state,
+    tokenize,
+)
+
+
+def test_bm25_state_json_round_trip_and_hash_are_deterministic() -> None:
+    state = BM25SparseEncoder.fit(["alpha beta", "beta gamma"]).state
+
+    payload = bm25_state_to_json_dict(state)
+    restored = bm25_state_from_json_dict(payload)
+
+    assert restored == state
+    assert canonical_bm25_state(restored) == canonical_bm25_state(state)
+    assert bm25_state_hash(restored) == bm25_state_hash(state)
+    assert len(bm25_state_hash(state)) == 64
+
+
+def test_bm25_state_hash_changes_with_vocabulary() -> None:
+    first = BM25SparseEncoder.fit(["alpha beta"]).state
+    second = BM25SparseEncoder.fit(["alpha gamma"]).state
+
+    assert bm25_state_hash(first) != bm25_state_hash(second)
+
+
+def test_existing_bm25_file_save_and_load_remain_compatible(tmp_path: Path) -> None:
+    path = tmp_path / "bm25.json"
+    encoder = BM25SparseEncoder.fit(["credit report", "mortgage disclosure"])
+
+    encoder.save(path)
+    loaded = BM25SparseEncoder.load(path)
+
+    assert loaded.state == encoder.state
+    assert loaded.encode_query("credit disclosure") == encoder.encode_query(
+        "credit disclosure"
+    )
 
 
 def test_bm25_state_uses_deterministic_vocabulary_document_frequency_and_token_lengths() -> None:

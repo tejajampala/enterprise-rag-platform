@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 import yaml
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, PydanticBaseSettingsSource, SettingsConfigDict
 
 
@@ -45,6 +45,51 @@ class AWSSettings(BaseModel):
     tcp_keepalive: bool = True
 
 
+class DatabaseSettings(BaseModel):
+    """Optional Phase 3 application database configuration."""
+
+    url: str | None = None
+
+    @field_validator("url", mode="before")
+    @classmethod
+    def blank_url_is_unconfigured(cls, value: object) -> object:
+        if isinstance(value, str) and not value.strip():
+            return None
+        return value
+
+
+class RuntimeSettings(BaseModel):
+    """Explicit retrieval backend selected for the application process."""
+
+    profile: Literal["fixture", "evaluation", "managed"] = "fixture"
+
+
+class ManagedIngestionSettings(BaseModel):
+    """Identity for the independently managed Phase 3 corpus."""
+
+    corpus_key: str = "consumer-finance-managed"
+    qdrant_collection_prefix: str = "consumer_finance_managed"
+
+
+class ManagedIndexSettings(BaseModel):
+    """Build identity and conservative operations settings for managed generations."""
+
+    format_version: str = "managed-hybrid-index-v1"
+    dense_vector_name: str = "dense_hnsw"
+    sparse_vector_name: str = "sparse_bm25"
+    distance_metric: Literal["cosine"] = "cosine"
+    hnsw_m: int = Field(default=16, gt=0)
+    hnsw_ef_construct: int = Field(default=100, gt=0)
+    bm25_k1: float = Field(default=1.2, gt=0)
+    bm25_b: float = Field(default=0.75, ge=0, le=1)
+    sparse_modifier: Literal["none"] = "none"
+    sparse_on_disk: bool = False
+    retained_retired_generations: int = Field(default=2, ge=0)
+    retired_cleanup_min_age_hours: float = Field(default=24.0, ge=0)
+    dense_reuse_read_max_attempts: int = Field(default=3, ge=1, le=10)
+    dense_reuse_read_backoff_seconds: float = Field(default=0.25, ge=0, le=10)
+
+
 class QdrantSettings(BaseModel):
     url: str = "http://localhost:6333"
     collection_name: str = "consumer_finance_phase1"
@@ -72,6 +117,7 @@ class RetrievalSettings(BaseModel):
     fused_candidates: int = Field(default=12, gt=0)
     final_contexts: int = Field(default=5, gt=0)
     rrf_k: int = Field(default=60, gt=0)
+    hnsw_ef: int | None = Field(default=None, gt=0)
 
 
 class ContextSettings(BaseModel):
@@ -124,6 +170,10 @@ class AppSettings(BaseSettings):
 
     models: ModelsSettings
     aws: AWSSettings = AWSSettings()
+    database: DatabaseSettings = DatabaseSettings()
+    runtime: RuntimeSettings = RuntimeSettings()
+    managed_ingestion: ManagedIngestionSettings = ManagedIngestionSettings()
+    managed_index: ManagedIndexSettings = ManagedIndexSettings()
     qdrant: QdrantSettings = QdrantSettings()
     chunking: ChunkingSettings = ChunkingSettings()
     retrieval: RetrievalSettings = RetrievalSettings()

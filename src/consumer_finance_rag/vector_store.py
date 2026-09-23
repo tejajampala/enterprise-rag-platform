@@ -18,9 +18,16 @@ POINT_NAMESPACE = uuid.UUID("73cf7db2-c6f4-43f0-b68d-6af773734caf")
 class QdrantHybridStore:
     """One Qdrant collection with HNSW dense and sparse BM25 named vectors."""
 
-    def __init__(self, settings: QdrantSettings, client: QdrantClient | None = None) -> None:
+    def __init__(
+        self,
+        settings: QdrantSettings,
+        client: QdrantClient | None = None,
+        *,
+        query_hnsw_ef: int | None = None,
+    ) -> None:
         self.settings = settings
         self.client = client or QdrantClient(url=settings.url)
+        self.query_hnsw_ef = query_hnsw_ef
 
     def recreate_collection(self, dense_size: int) -> None:
         """Create a fresh development collection.
@@ -88,19 +95,34 @@ class QdrantHybridStore:
             )
         self.client.upsert(collection_name=self.settings.collection_name, points=points, wait=True)
 
-    def search_dense(self, vector: list[float], limit: int) -> list[RetrievedChunk]:
+    def search_dense(
+        self,
+        vector: list[float],
+        limit: int,
+        *,
+        query_filter: models.Filter | None = None,
+    ) -> list[RetrievedChunk]:
         result = self.client.query_points(
             collection_name=self.settings.collection_name,
             query=vector,
             using=self.settings.dense_vector_name,
             limit=limit,
             with_payload=True,
-            search_params=models.SearchParams(hnsw_ef=max(limit * 2, 32), exact=False),
+            search_params=models.SearchParams(
+                hnsw_ef=self.query_hnsw_ef or max(limit * 2, 32),
+                exact=False,
+            ),
+            query_filter=query_filter,
         )
         return self._to_retrieved(result.points, rank_kind="dense")
 
     def search_sparse(
-        self, query: str, encoder: BM25SparseEncoder, limit: int
+        self,
+        query: str,
+        encoder: BM25SparseEncoder,
+        limit: int,
+        *,
+        query_filter: models.Filter | None = None,
     ) -> list[RetrievedChunk]:
         sparse = encoder.encode_query(query)
         if not sparse.indices:
@@ -111,6 +133,7 @@ class QdrantHybridStore:
             using=self.settings.sparse_vector_name,
             limit=limit,
             with_payload=True,
+            query_filter=query_filter,
         )
         return self._to_retrieved(result.points, rank_kind="sparse")
 
@@ -156,6 +179,11 @@ class QdrantHybridStore:
                     "category": payload.get("category"),
                     "source_url": payload.get("source_url"),
                     "source_id": payload.get("source_id"),
+                    "access_visibility": payload.get("access_visibility"),
+                    "allowed_groups": payload.get("allowed_groups"),
+                    "contains_pii": payload.get("contains_pii"),
+                    "pii_types": payload.get("pii_types"),
+                    "pii_detector_version": payload.get("pii_detector_version"),
                 },
             )
             retrieved.append(

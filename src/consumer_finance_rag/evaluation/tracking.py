@@ -18,15 +18,21 @@ class EvaluationRun(Protocol):
     @property
     def active(self) -> bool: ...
 
+    @property
+    def run_id(self) -> str | None: ...
+
     def log_parameters(self, parameters: Mapping[str, ParameterValue]) -> None: ...
 
     def log_metrics(self, metrics: Mapping[str, float]) -> None: ...
 
     def log_artifacts(self, paths: list[Path]) -> None: ...
 
+    def log_tags(self, tags: Mapping[str, ParameterValue]) -> None: ...
+
 
 class DisabledEvaluationRun:
     active = False
+    run_id = None
 
     def log_parameters(self, parameters: Mapping[str, ParameterValue]) -> None:
         return None
@@ -37,9 +43,15 @@ class DisabledEvaluationRun:
     def log_artifacts(self, paths: list[Path]) -> None:
         return None
 
+    def log_tags(self, tags: Mapping[str, ParameterValue]) -> None:
+        return None
+
 
 class ActiveEvaluationRun:
     active = True
+
+    def __init__(self, run_id: str) -> None:
+        self.run_id = run_id
 
     def log_parameters(self, parameters: Mapping[str, ParameterValue]) -> None:
         import mlflow
@@ -59,6 +71,12 @@ class ActiveEvaluationRun:
 
         for path in paths:
             mlflow.log_artifact(str(path), artifact_path="evaluation_reports")
+
+    def log_tags(self, tags: Mapping[str, ParameterValue]) -> None:
+        import mlflow
+
+        logged = {key: "unavailable" if value is None else value for key, value in tags.items()}
+        mlflow.set_tags(logged)
 
 
 class EvaluationTrackingError(RuntimeError):
@@ -80,8 +98,8 @@ def evaluation_run(
 
         mlflow.set_tracking_uri(settings.tracking_uri)
         mlflow.set_experiment(settings.evaluation_experiment_name)
-        with mlflow.start_run(run_name=run_name):
-            yield ActiveEvaluationRun()
+        with mlflow.start_run(run_name=run_name) as active_run:
+            yield ActiveEvaluationRun(active_run.info.run_id)
     except Exception as error:
         raise EvaluationTrackingError(
             f"MLflow evaluation logging failed at {settings.tracking_uri}. "

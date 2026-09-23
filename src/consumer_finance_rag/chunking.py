@@ -31,6 +31,8 @@ class ParagraphChunker:
             "source_url": document.source_url,
             "category": document.category,
             "content_hash": document.content_hash,
+            "access_visibility": document.access_policy.visibility.value,
+            "allowed_groups": list(document.access_policy.canonical_groups),
         }
         chunks: list[Chunk] = []
         for ordinal, text in enumerate(texts):
