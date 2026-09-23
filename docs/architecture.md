@@ -775,6 +775,43 @@ the explicit threshold PASS/FAIL result. It never logs queries, context text, ma
 principal IDs, credentials, or group names. Without `--log-mlflow`, managed quality evaluation
 does not initialize MLflow at all.
 
+### Managed end-to-end answer evaluation
+
+`evaluation/managed_rag.py` composes the existing deterministic retrieval-quality evaluator with
+the existing `RAGPipeline`; it does not implement another retrieval or generation path. The CLI
+resolves ACTIVE exactly once and passes the resulting `ManagedRetrievalRuntime` into both stages.
+Consequently every case uses the pinned collection, persisted BM25 encoder, configuration
+fingerprints, ACL filter, defense-in-depth ACL validation, and REDACT-mode PII processing even if
+ACTIVE changes while the process is running.
+
+```mermaid
+flowchart LR
+    A[(PostgreSQL ACTIVE)] -->|resolve once| R[ManagedRetrievalRuntime]
+    R --> Q[(Pinned Qdrant generation)]
+    R --> D[Deterministic identity scoring]
+    R --> P[Existing RAGPipeline]
+    P --> B[AWS Bedrock generation]
+    B -. explicit opt-in .-> M[MLflow GenAI judges]
+    B -. explicit opt-in .-> G[RAGAS judges]
+    D --> S[Safe versioned report]
+    M --> S
+    G --> S
+```
+
+The managed dataset contract is intentionally narrower than the older Phase 2 seed schema. It
+accepts only reviewed synthetic PUBLIC cases with no principal or groups and validates expected
+chunk identities against the pinned collection before generation. This makes the initial live
+evaluation boundary explicit without weakening normal ACL behavior or claiming unreviewed qrels
+as ground truth.
+
+The report separates retrieval quality from generated-answer quality. It persists case IDs,
+retrieved/cited chunk identities, model and generation identity, numeric metrics, stage status,
+latency, and token counts, but never questions, answers, contexts, matched PII, or judge
+rationales. Operational `RetrievalMetrics` stays metadata-only. MLflow GenAI rows and generation
+traces are content-bearing and therefore require explicit CLI opt-in; combined logging resumes the
+single judge run instead of creating a run per case. RAGAS and MLflow reuse their existing
+adapters, and a missing/failed judge is represented as `FAILED` or `UNAVAILABLE`, never as a pass.
+
 ## MLflow GenAI and RAGAS
 
 `evaluation/mlflow_genai.py` is the only MLflow judge/dataset adapter. Judge construction calls

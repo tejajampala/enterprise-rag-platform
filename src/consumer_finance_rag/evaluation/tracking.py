@@ -85,7 +85,11 @@ class EvaluationTrackingError(RuntimeError):
 
 @contextmanager
 def evaluation_run(
-    settings: MLflowSettings, *, run_name: str, enabled: bool = True
+    settings: MLflowSettings,
+    *,
+    run_name: str,
+    enabled: bool = True,
+    existing_run_id: str | None = None,
 ) -> Iterator[EvaluationRun]:
     if not settings.enabled or not enabled:
         yield DisabledEvaluationRun()
@@ -98,7 +102,12 @@ def evaluation_run(
 
         mlflow.set_tracking_uri(settings.tracking_uri)
         mlflow.set_experiment(settings.evaluation_experiment_name)
-        with mlflow.start_run(run_name=run_name) as active_run:
+        run_context = (
+            mlflow.start_run(run_id=existing_run_id)
+            if existing_run_id is not None
+            else mlflow.start_run(run_name=run_name)
+        )
+        with run_context as active_run:
             yield ActiveEvaluationRun(active_run.info.run_id)
     except Exception as error:
         raise EvaluationTrackingError(

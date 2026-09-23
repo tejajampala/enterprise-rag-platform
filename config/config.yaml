@@ -86,6 +86,7 @@ mlflow:
 
 evaluation:
   dataset_path: data/evaluation/seed_cases.json
+  managed_dataset_path: data/evaluation/managed_public_cases.json
   dataset_name: consumer-finance-seed-evaluation
   dataset_version: "1.0"
   qdrant_collection_name: consumer_finance_evaluation

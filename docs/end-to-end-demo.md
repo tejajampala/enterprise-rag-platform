@@ -214,8 +214,30 @@ MLflow tracking is optional and reporting-only:
 uv run python scripts/evaluate_managed_retrieval.py --current --log-mlflow
 ```
 
-This does not invoke a paid judge. Generated-answer evaluation and opt-in MLflow/RAGAS judges are
-separate commands and are intentionally outside this deterministic demo.
+This does not invoke a paid judge. To exercise the same pinned managed runtime with the reviewed
+PUBLIC answer-evaluation dataset, start with its retrieval-only mode:
+
+```powershell
+# READ ONLY for PostgreSQL/Qdrant; writes a local, content-free report.
+uv run python scripts/evaluate_managed_rag.py --current --limit 2
+```
+
+The following commands are explicit live AWS operations and may incur charges. They preserve ACL
+filtering and use REDACT-mode contexts; the generation and judge models remain independently
+configured:
+
+```powershell
+# LIVE MODEL CALL: Bedrock answer generation only.
+uv run python scripts/evaluate_managed_rag.py --current --generate --limit 2
+
+# LIVE MODEL/JUDGE CALLS: content-bearing PUBLIC evaluation boundary.
+uv run python scripts/evaluate_managed_rag.py --current --generate --limit 2 `
+  --with-mlflow-judges --with-ragas --log-mlflow
+```
+
+The generated report contains identities, metrics, statuses, latency, and token totals, but omits
+question, answer, context, PII values, principals, groups, and judge rationale text. MLflow tracing
+and judges are disabled unless explicitly requested; the combined command uses one evaluation run.
 
 ## 8. Open the read-only operations dashboard
 
