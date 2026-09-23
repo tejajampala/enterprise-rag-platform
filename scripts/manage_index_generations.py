@@ -136,14 +136,22 @@ def format_validation(report: ManagedGenerationValidationReport) -> str:
     for issue in report.issues:
         lines.append(f"ERROR: {issue}")
     for result in report.generations:
-        outcome = "PASS" if result.valid else "FAIL"
+        outcome = result.outcome
         physical = "present" if result.physical_present else "missing"
         lines.append(
-            f"g{result.generation:06d} {result.status} {outcome} physical={physical}"
+            f"g{result.generation:06d} {result.status} {outcome} physical={physical} "
+            f"classification={result.classification.value}"
         )
         lines.extend(f"  issue: {issue}" for issue in result.issues)
         lines.extend(f"  note: {note}" for note in result.notes)
-    lines.extend(["", f"Overall: {'PASS' if report.valid else 'FAIL'}"])
+    lines.extend(
+        [
+            "",
+            f"ACTIVE validation: {report.active_health.value}",
+            f"Historical audit: {report.historical_audit}",
+            f"Overall: {report.overall_status.value}",
+        ]
+    )
     return "\n".join(lines)
 
 

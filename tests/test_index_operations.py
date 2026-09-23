@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Generator
+from collections.abc import Generator, Sequence
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -16,11 +16,14 @@ from consumer_finance_rag.lineage.fingerprints import (
     ManagedIndexConfiguration,
     embedding_fingerprint,
     managed_index_configuration_identity,
+    managed_index_configuration_payload_fingerprint,
 )
 from consumer_finance_rag.lineage.index_operations import (
     CleanupClassification,
     GenerationCleanupState,
+    GenerationValidationClassification,
     ManagedIndexOperationsService,
+    ManagedValidationStatus,
     plan_generation_cleanup,
 )
 from consumer_finance_rag.lineage.index_types import ActiveChunk, ManagedPointInput
@@ -220,11 +223,13 @@ def add_generation(
     failed_at: datetime | None = None,
     configuration: ManagedIndexConfiguration | None = None,
     collection: str | None = None,
+    chunk_pks: Sequence[UUID] | None = None,
 ) -> UUID:
     selected_configuration = configuration or environment.configuration
+    selected_chunk_pks = tuple(chunk_pks or (environment.chunk_pk,))
     identity = managed_index_configuration_identity(selected_configuration)
     encoder = BM25SparseEncoder.fit(
-        ["credit card dispute evidence"],
+        ["credit card dispute evidence"] * len(selected_chunk_pks),
         k1=selected_configuration.bm25_k1,
         b=selected_configuration.bm25_b,
     )
@@ -251,7 +256,7 @@ def add_generation(
                 embedding_dimension=DIMENSION,
                 chunking_fingerprint=selected_configuration.chunking_fingerprint,
                 document_count=1,
-                chunk_count=1,
+                chunk_count=len(selected_chunk_pks),
                 created_at=NOW - timedelta(days=10 - generation),
                 activated_at=NOW - timedelta(days=9 - generation)
                 if status in {"ACTIVE", "RETIRED"}
@@ -262,13 +267,14 @@ def add_generation(
             )
         )
         if membership:
-            session.add(
+            session.add_all(
                 IndexStateChunk(
                     index_state_id=index_state_id,
-                    chunk_pk=environment.chunk_pk,
-                    qdrant_point_id=managed_point_id(environment.chunk_pk),
+                    chunk_pk=chunk_pk,
+                    qdrant_point_id=managed_point_id(chunk_pk),
                     dense_action="COMPUTED",
                 )
+                for chunk_pk in selected_chunk_pks
             )
     if physical:
         store = ManagedQdrantStore(
@@ -280,7 +286,17 @@ def add_generation(
         store.create_generation_collection(collection_name)
         store.upsert_points(
             collection_name,
-            [managed_point(environment, index_state_id, generation, encoder)],
+            [
+                managed_point(
+                    environment,
+                    index_state_id,
+                    generation,
+                    encoder,
+                    chunk_pk=chunk_pk,
+                    ordinal=ordinal,
+                )
+                for ordinal, chunk_pk in enumerate(selected_chunk_pks)
+            ],
         )
     return index_state_id
 
@@ -290,9 +306,14 @@ def managed_point(
     index_state_id: UUID,
     generation: int,
     encoder: BM25SparseEncoder | None = None,
+    *,
+    chunk_pk: UUID | None = None,
+    ordinal: int = 0,
 ) -> ManagedPointInput:
     sparse_encoder = encoder or BM25SparseEncoder.fit(["credit card dispute evidence"])
     sparse = sparse_encoder.encode_document("credit card dispute evidence")
+    selected_chunk_pk = chunk_pk or environment.chunk_pk
+    chunk_hash = "5" * 64 if ordinal == 0 else f"{ordinal + 5:x}" * 64
     chunk = ActiveChunk(
         document_pk=environment.document_pk,
         document_version_id=environment.document_version_id,
@@ -305,10 +326,10 @@ def managed_point(
         source_version="v1",
         content_hash="1" * 64,
         compatibility_document_id="document-1",
-        chunk_pk=environment.chunk_pk,
-        compatibility_chunk_id="chunk-1",
-        ordinal=0,
-        chunk_hash="5" * 64,
+        chunk_pk=selected_chunk_pk,
+        compatibility_chunk_id=f"chunk-{ordinal + 1}",
+        ordinal=ordinal,
+        chunk_hash=chunk_hash,
         text="credit card dispute evidence",
         chunking_fingerprint=environment.configuration.chunking_fingerprint,
     )
@@ -352,6 +373,29 @@ def managed_point(
             "pii_detector_version": DETERMINISTIC_PII_VERSION,
         },
     )
+
+
+def six_fixture_chunks(environment: OperationsEnvironment) -> tuple[UUID, ...]:
+    """Expand the fixture document to the six chunks seen in the regression state."""
+
+    chunk_pks = [environment.chunk_pk]
+    with environment.sessions() as session, session.begin():
+        for ordinal in range(1, 6):
+            chunk_pk = uuid4()
+            chunk_pks.append(chunk_pk)
+            session.add(
+                LineageChunk(
+                    chunk_pk=chunk_pk,
+                    document_version_id=environment.document_version_id,
+                    chunking_fingerprint=environment.configuration.chunking_fingerprint,
+                    compatibility_chunk_id=f"chunk-{ordinal + 1}",
+                    ordinal=ordinal,
+                    chunk_hash=f"{ordinal + 5:x}" * 64,
+                    text="credit card dispute evidence",
+                    chunk_metadata={"title": "Consumer guidance"},
+                )
+            )
+    return tuple(chunk_pks)
 
 
 def restoration_service(
@@ -413,6 +457,172 @@ def test_active_collection_passes_bounded_and_deep_validation(
     assert deep.generations[0].deep is True
 
 
+def test_active_health_is_separate_from_real_world_historical_findings(
+    environment: OperationsEnvironment,
+) -> None:
+    chunk_pks = six_fixture_chunks(environment)
+    legacy_id = add_generation(
+        environment,
+        1,
+        "RETIRED",
+        retired_at=NOW - timedelta(days=4),
+        chunk_pks=chunk_pks,
+    )
+    add_generation(
+        environment,
+        2,
+        "FAILED",
+        physical=False,
+        membership=False,
+        failed_at=NOW,
+        chunk_pks=chunk_pks,
+    )
+    add_generation(
+        environment,
+        3,
+        "FAILED",
+        physical=False,
+        membership=False,
+        failed_at=NOW,
+        chunk_pks=chunk_pks,
+    )
+    add_generation(environment, 4, "ACTIVE", chunk_pks=chunk_pks)
+    with environment.sessions() as session, session.begin():
+        legacy = session.get(IndexState, legacy_id)
+        assert legacy is not None
+        payload = dict(legacy.index_configuration or {})
+        payload.pop("pii_detector_version")
+        legacy.index_configuration = payload
+        legacy.index_configuration_fingerprint = (
+            managed_index_configuration_payload_fingerprint(payload)
+        )
+
+    before_database = database_counts(environment)
+    before_collections = tuple(
+        sorted(item.name for item in environment.client.get_collections().collections)
+    )
+    service = environment.service()
+    report = service.validate()
+    deep_report = service.validate(deep=True)
+    after_collections = tuple(
+        sorted(item.name for item in environment.client.get_collections().collections)
+    )
+
+    assert report.active_health is ManagedValidationStatus.PASS
+    assert report.historical_audit == "WARNINGS"
+    assert report.overall_status is ManagedValidationStatus.PASS_WITH_WARNINGS
+    assert report.valid is True
+    by_generation = {result.generation: result for result in report.generations}
+    assert by_generation[1].classification is (
+        GenerationValidationClassification.HISTORICAL_SCHEMA_INCOMPATIBLE
+    )
+    assert "pii_detector_version" in by_generation[1].notes[0]
+    assert by_generation[2].classification is (
+        GenerationValidationClassification.FAILED_BUILD_INCOMPLETE
+    )
+    assert "count 0 of intended 6" in by_generation[2].notes[0]
+    assert by_generation[3].classification is (
+        GenerationValidationClassification.FAILED_BUILD_INCOMPLETE
+    )
+    assert by_generation[4].classification is GenerationValidationClassification.PASS
+    assert by_generation[4].valid is True
+    deep_by_generation = {
+        result.generation: result for result in deep_report.generations
+    }
+    assert deep_report.overall_status is ManagedValidationStatus.PASS_WITH_WARNINGS
+    assert deep_by_generation[1].classification is (
+        GenerationValidationClassification.HISTORICAL_SCHEMA_INCOMPATIBLE
+    )
+    assert deep_by_generation[1].issues == ()
+    assert deep_by_generation[4].deep is True
+    assert deep_by_generation[4].valid is True
+    cleanup = {item.generation: item for item in service.cleanup_plan().candidates}
+    assert cleanup[1].classification is CleanupClassification.RETAINED
+    assert cleanup[2].classification is CleanupClassification.PHYSICAL_MISSING
+    assert cleanup[3].classification is CleanupClassification.PHYSICAL_MISSING
+    assert cleanup[4].classification is CleanupClassification.ACTIVE_PROTECTED
+    assert database_counts(environment) == before_database
+    assert after_collections == before_collections
+
+
+def test_active_missing_pii_detector_version_remains_critical(
+    environment: OperationsEnvironment,
+) -> None:
+    state_id = add_generation(environment, 1, "ACTIVE")
+    with environment.sessions() as session, session.begin():
+        state = session.get(IndexState, state_id)
+        assert state is not None
+        payload = dict(state.index_configuration or {})
+        payload.pop("pii_detector_version")
+        state.index_configuration = payload
+        state.index_configuration_fingerprint = (
+            managed_index_configuration_payload_fingerprint(payload)
+        )
+
+    report = environment.service().validate()
+
+    assert report.active_health is ManagedValidationStatus.FAIL
+    assert report.overall_status is ManagedValidationStatus.FAIL
+    assert report.generations[0].classification is (
+        GenerationValidationClassification.FAIL
+    )
+    assert any("pii_detector_version" in issue for issue in report.generations[0].issues)
+
+
+def test_current_schema_retired_corruption_remains_visible(
+    environment: OperationsEnvironment,
+) -> None:
+    retired_id = add_generation(
+        environment,
+        1,
+        "RETIRED",
+        retired_at=NOW - timedelta(days=4),
+    )
+    add_generation(environment, 2, "ACTIVE")
+    with environment.sessions() as session, session.begin():
+        retired = session.get(IndexState, retired_id)
+        assert retired is not None
+        retired.bm25_state_hash = "f" * 64
+
+    report = environment.service().validate()
+    retired_result = report.generations[0]
+
+    assert report.active_health is ManagedValidationStatus.PASS
+    assert report.overall_status is ManagedValidationStatus.PASS_WITH_WARNINGS
+    assert retired_result.classification is GenerationValidationClassification.FAIL
+    assert any("BM25 state hash" in issue for issue in retired_result.issues)
+
+
+def test_failed_partial_membership_is_an_informational_historical_finding(
+    environment: OperationsEnvironment,
+) -> None:
+    chunk_pks = six_fixture_chunks(environment)
+    failed_id = add_generation(
+        environment,
+        1,
+        "FAILED",
+        physical=False,
+        failed_at=NOW,
+        chunk_pks=chunk_pks,
+    )
+    add_generation(environment, 2, "ACTIVE", chunk_pks=chunk_pks)
+    with environment.sessions() as session, session.begin():
+        for chunk_pk in chunk_pks[2:]:
+            membership = session.get(IndexStateChunk, (failed_id, chunk_pk))
+            assert membership is not None
+            session.delete(membership)
+
+    report = environment.service().validate()
+    failed = report.generations[0]
+
+    assert report.overall_status is ManagedValidationStatus.PASS_WITH_WARNINGS
+    assert failed.classification is (
+        GenerationValidationClassification.FAILED_BUILD_INCOMPLETE
+    )
+    assert failed.issues == ()
+    assert any("count 2 of intended 6" in note for note in failed.notes)
+
+
 def test_multiple_active_generations_fail_validation(
     environment: OperationsEnvironment,
 ) -> None:
@@ -433,8 +643,10 @@ def test_active_missing_collection_fails_validation(
 ) -> None:
     add_generation(environment, 1, "ACTIVE", physical=False)
 
-    result = environment.service().validate().generations[0]
+    report = environment.service().validate()
+    result = report.generations[0]
 
+    assert report.overall_status is ManagedValidationStatus.FAIL
     assert result.valid is False
     assert "ACTIVE Qdrant collection is missing" in result.issues
 
@@ -476,8 +688,10 @@ def test_active_persisted_corruption_fails_validation(
                 replace(environment.configuration, payload_schema_version="unsupported-v99")
             ).fingerprint
 
-    result = environment.service().validate().generations[0]
+    report = environment.service().validate()
+    result = report.generations[0]
 
+    assert report.overall_status is ManagedValidationStatus.FAIL
     assert result.valid is False
     assert any(expected in issue for issue in result.issues)
 
@@ -1015,6 +1229,35 @@ def test_restore_rejects_noncanonical_historical_collection(
         source.qdrant_collection = "noncanonical_historical_collection"
 
     with pytest.raises(RestorationValidationError, match="not canonical"):
+        service.plan(1)
+
+
+def test_restore_rejects_legacy_schema_incompatible_history(
+    environment: OperationsEnvironment,
+) -> None:
+    service, configuration = restoration_service(environment)
+    source_id = add_generation(
+        environment,
+        1,
+        "RETIRED",
+        retired_at=NOW - timedelta(days=2),
+        configuration=configuration,
+    )
+    add_generation(environment, 2, "ACTIVE", configuration=configuration)
+    with environment.sessions() as session, session.begin():
+        source = session.get(IndexState, source_id)
+        assert source is not None
+        payload = dict(source.index_configuration or {})
+        payload.pop("pii_detector_version")
+        source.index_configuration = payload
+        source.index_configuration_fingerprint = (
+            managed_index_configuration_payload_fingerprint(payload)
+        )
+
+    with pytest.raises(
+        RestorationValidationError,
+        match=r"HISTORICAL_SCHEMA_INCOMPATIBLE.*pii_detector_version",
+    ):
         service.plan(1)
 
 

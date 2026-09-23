@@ -35,6 +35,7 @@ from consumer_finance_rag.operations_dashboard import (
     safe_failure,
     safe_identifier,
     validation_rows,
+    validation_summary,
 )
 from consumer_finance_rag.retrieval_quality import RetrievalQualityThresholds
 
@@ -132,7 +133,8 @@ def _display_platform_health(
     active = snapshot.active if snapshot is not None else None
     validation = snapshot.validation if snapshot is not None else None
     point_count = snapshot.active_point_count if snapshot is not None else None
-    metrics = st.columns(6)
+    summary = validation_summary(validation) if validation is not None else None
+    metrics = st.columns(7)
     metrics[0].metric(
         "Managed corpus",
         safe_identifier(settings.managed_ingestion.corpus_key),
@@ -161,12 +163,12 @@ def _display_platform_health(
         ),
     )
     metrics[5].metric(
-        "Validation",
-        (
-            "Unavailable"
-            if validation is None
-            else "PASS" if validation.valid else "FAIL"
-        ),
+        "ACTIVE validation",
+        "Unavailable" if summary is None else summary["active_validation"],
+    )
+    metrics[6].metric(
+        "Historical audit",
+        "Unavailable" if summary is None else summary["historical_audit"],
     )
     if snapshot is not None:
         for error in (
@@ -200,10 +202,12 @@ def _display_validation(snapshot: OperationsSnapshot | None) -> None:
         st.info("No validation result is available.")
         return
     report = snapshot.validation
-    if report.valid:
-        st.success("Managed generation validation passed.")
+    if report.overall_status.value == "PASS":
+        st.success("ACTIVE validation passed; historical audit has no findings.")
+    elif report.overall_status.value == "PASS_WITH_WARNINGS":
+        st.warning("ACTIVE validation passed; historical audit has warnings.")
     else:
-        st.error("Managed generation validation failed.")
+        st.error("ACTIVE managed generation validation failed.")
     if report.issues:
         st.error("One or more corpus-level invariants failed.")
     st.dataframe(

@@ -365,7 +365,19 @@ generation, canonical naming, persisted BM25/configuration hashes, membership an
 vector names, dense dimension, distance, payload compatibility, and collection readability. Deep
 validation additionally scrolls points to check point/lineage identity, membership, chunking, ACL,
 PII, payload schema, and vector presence. RETIRED collections missing after cleanup and FAILED rows
-without collections remain valid historical states; missing ACTIVE storage is an operational error.
+without collections remain noncritical historical findings; missing ACTIVE storage is an
+operational error.
+
+Corpus-level validation uses the ACTIVE serving boundary: `PASS` means ACTIVE is valid and history
+has no findings, `PASS_WITH_WARNINGS` means ACTIVE is valid with visible historical findings, and
+`FAIL` means ACTIVE is absent, ambiguous, or invalid. ACTIVE validation remains strict across the
+current configuration, BM25, membership, physical point count, and ACL/PII payload contracts.
+FAILED zero/partial membership and storage are classified as incomplete build history. RETIRED
+metadata that predates the current configuration schema is explicitly
+`HISTORICAL_SCHEMA_INCOMPATIBLE`; it is not physically deep-validated under the wrong schema, is
+not reported as verified, is not mutated, and cannot pass the separate strict restoration gate.
+Current-schema RETIRED corruption remains a generation-level validation failure and historical
+warning rather than being hidden.
 
 The separate `app/operations_dashboard.py` is a read-only presentation boundary over those same
 operations services:
@@ -395,6 +407,10 @@ report rendering. Tables use explicit metadata allowlists and withhold stored fa
 free-form restoration reasons, payloads, queries, contexts, PII values, principals, groups,
 credentials, and connection strings. Deployment must bind locally or supply external
 authentication; the dashboard does not invent an identity system.
+
+The dashboard derives both ACTIVE validation and historical-audit status from the same immutable
+operations report. It does not run a second validator or fold legacy/failed history into the
+current serving-health indicator; generation-level diagnostics remain visible below the summary.
 
 The pure cleanup planner protects ACTIVE, READY, and BUILDING states, the newest configured number
 of RETIRED generations, and RETIRED generations inside the configured minimum-age grace period.

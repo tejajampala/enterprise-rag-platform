@@ -210,13 +210,24 @@ def validation_rows(report: ManagedGenerationValidationReport) -> tuple[TableRow
             "generation": result.generation,
             "status": result.status,
             "mode": "deep" if result.deep else "bounded",
-            "result": "PASS" if result.valid else "FAIL",
+            "result": result.outcome,
+            "classification": result.classification.value,
             "physical_present": result.physical_present,
             "issues": _safe_diagnostics(result.issues),
             "notes": _safe_diagnostics(result.notes),
         }
         for result in report.generations
     )
+
+
+def validation_summary(report: ManagedGenerationValidationReport) -> TableRow:
+    """Return ACTIVE and historical outcomes without conflating their severity."""
+
+    return {
+        "active_validation": report.active_health.value,
+        "historical_audit": report.historical_audit,
+        "overall": report.overall_status.value,
+    }
 
 
 def cleanup_plan_rows(plan: GenerationCleanupPlan) -> tuple[TableRow, ...]:

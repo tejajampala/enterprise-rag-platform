@@ -238,6 +238,16 @@ counts, and membership counts. `--deep` is intentionally explicit because it scr
 to verify generation/lineage identities, point IDs, payload schema, ACL fields, PII fields,
 chunking identity, and vector presence.
 
+Validation reports ACTIVE serving health separately from the historical audit. The unique ACTIVE
+generation still must satisfy every current configuration, BM25, membership, physical-count,
+ACL, and PII invariant; any failure produces overall `FAIL`. If ACTIVE passes while RETIRED legacy
+metadata, cleaned history, FAILED partial builds, or historical corruption is present, the result
+is `PASS_WITH_WARNINGS` and every generation-level finding remains visible. A RETIRED schema that
+the current validator cannot safely interpret is marked `HISTORICAL_SCHEMA_INCOMPATIBLE`, never
+claimed as verified or upgraded, and remains ineligible for restoration. FAILED intended counts
+are retained as build history; zero or partial memberships and absent storage are informational
+historical findings rather than serving-index failures.
+
 For a separate read-only visual view, launch the operator dashboard locally:
 
 ```bash
@@ -252,6 +262,10 @@ models. It displays only allowlisted metadata—never database/Qdrant connection
 queries, source or chunk text, payloads, PII values, principals, access groups, or credentials.
 This is not an authenticated production administration console: run it locally as shown, or place
 it behind appropriate external authentication and network controls.
+
+Platform Health presents `ACTIVE validation` independently from `Historical audit`, so historical
+warnings do not imply that a healthy current serving generation is unavailable. The generation
+integrity table retains the warning or failure classification for each historical generation.
 
 Cleanup planning is read-only. Physical deletion requires both flags:
 

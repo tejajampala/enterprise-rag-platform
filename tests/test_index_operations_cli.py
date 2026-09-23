@@ -13,7 +13,9 @@ from consumer_finance_rag.config import DatabaseSettings, load_settings
 from consumer_finance_rag.lineage.index_operations import (
     GenerationCleanupExecutionResult,
     GenerationCleanupPlan,
+    GenerationValidationClassification,
     ManagedGenerationValidationReport,
+    ManagedGenerationValidationResult,
 )
 from consumer_finance_rag.lineage.restoration import (
     GenerationRestorationPlan,
@@ -186,6 +188,49 @@ def test_cli_deep_validation_is_explicit(monkeypatch: Any) -> None:
     assert manage_index_generations.main(["--validate", "--deep"]) == 0
 
     assert FakeOperationsService.validate_calls == [True]
+
+
+def test_cli_displays_active_health_and_historical_audit_separately() -> None:
+    report = ManagedGenerationValidationReport(
+        corpus_key="test",
+        active_count=1,
+        valid=True,
+        issues=(),
+        generations=(
+            ManagedGenerationValidationResult(
+                index_state_id=UUID(int=1),
+                generation=1,
+                status="RETIRED",
+                qdrant_collection="consumer_finance_managed_g000001",
+                physical_present=True,
+                deep=False,
+                valid=False,
+                issues=(),
+                notes=("HISTORICAL_SCHEMA_INCOMPATIBLE",),
+                classification=(
+                    GenerationValidationClassification.HISTORICAL_SCHEMA_INCOMPATIBLE
+                ),
+            ),
+            ManagedGenerationValidationResult(
+                index_state_id=UUID(int=4),
+                generation=4,
+                status="ACTIVE",
+                qdrant_collection="consumer_finance_managed_g000004",
+                physical_present=True,
+                deep=False,
+                valid=True,
+                issues=(),
+                notes=(),
+            ),
+        ),
+    )
+
+    output = manage_index_generations.format_validation(report)
+
+    assert "g000001 RETIRED WARNING" in output
+    assert "ACTIVE validation: PASS" in output
+    assert "Historical audit: WARNINGS" in output
+    assert "Overall: PASS_WITH_WARNINGS" in output
 
 
 def test_cli_restore_is_plan_only_without_confirm(monkeypatch: Any) -> None:

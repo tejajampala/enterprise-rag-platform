@@ -11,6 +11,7 @@ from consumer_finance_rag.lineage.index_operations import (
     CleanupClassification,
     GenerationCleanupCandidate,
     GenerationCleanupPlan,
+    GenerationValidationClassification,
     ManagedGenerationStatus,
     ManagedGenerationValidationReport,
     ManagedGenerationValidationResult,
@@ -28,6 +29,7 @@ from consumer_finance_rag.operations_dashboard import (
     restoration_provenance_rows,
     safe_identifier,
     validation_rows,
+    validation_summary,
 )
 from consumer_finance_rag.retrieval_quality import (
     RetrievalCaseResult,
@@ -306,6 +308,67 @@ def test_validation_and_cleanup_render_failed_invariants_and_protection() -> Non
     assert cleanup[1]["reason"] == (
         "Within the configured retired-generation retention set."
     )
+
+
+def test_dashboard_separates_active_health_from_historical_warnings() -> None:
+    report = ManagedGenerationValidationReport(
+        corpus_key=CORPUS,
+        active_count=1,
+        valid=True,
+        issues=(),
+        generations=(
+            ManagedGenerationValidationResult(
+                index_state_id=UUID(int=1),
+                generation=1,
+                status="RETIRED",
+                qdrant_collection="consumer_finance_managed_g000001",
+                physical_present=True,
+                deep=False,
+                valid=False,
+                issues=(),
+                notes=(
+                    "HISTORICAL_SCHEMA_INCOMPATIBLE: missing pii_detector_version",
+                ),
+                classification=(
+                    GenerationValidationClassification.HISTORICAL_SCHEMA_INCOMPATIBLE
+                ),
+            ),
+            ManagedGenerationValidationResult(
+                index_state_id=UUID(int=2),
+                generation=2,
+                status="FAILED",
+                qdrant_collection="consumer_finance_managed_g000002",
+                physical_present=False,
+                deep=False,
+                valid=False,
+                issues=(),
+                notes=("FAILED build membership incomplete: count 0 of intended 6",),
+                classification=(
+                    GenerationValidationClassification.FAILED_BUILD_INCOMPLETE
+                ),
+            ),
+            ManagedGenerationValidationResult(
+                index_state_id=UUID(int=4),
+                generation=4,
+                status="ACTIVE",
+                qdrant_collection="consumer_finance_managed_g000004",
+                physical_present=True,
+                deep=False,
+                valid=True,
+                issues=(),
+                notes=(),
+            ),
+        ),
+    )
+
+    assert validation_summary(report) == {
+        "active_validation": "PASS",
+        "historical_audit": "WARNINGS",
+        "overall": "PASS_WITH_WARNINGS",
+    }
+    rows = validation_rows(report)
+    assert [row["result"] for row in rows] == ["WARNING", "WARNING", "PASS"]
+    assert rows[0]["classification"] == "HISTORICAL_SCHEMA_INCOMPATIBLE"
 
 
 def test_postgresql_and_qdrant_failures_are_nonfatal_and_secret_safe() -> None:

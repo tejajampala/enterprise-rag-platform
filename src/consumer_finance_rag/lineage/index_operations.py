@@ -15,7 +15,10 @@ from sqlalchemy.orm import Session
 from consumer_finance_rag.access import access_policy_from_payload
 from consumer_finance_rag.config import ManagedIndexSettings
 from consumer_finance_rag.lineage.fingerprints import (
+    BM25_IMPLEMENTATION_VERSION,
+    BM25_TOKENIZER_VERSION,
     PAYLOAD_SCHEMA_VERSION,
+    POINT_ID_FORMAT_VERSION,
     ManagedIndexConfiguration,
 )
 from consumer_finance_rag.lineage.index_types import managed_point_id
@@ -64,6 +67,24 @@ class CleanupClassification(StrEnum):
     PHYSICAL_MISSING = "PHYSICAL_MISSING"
     ORPHAN = "ORPHAN"
     OTHER_PROTECTED = "OTHER_PROTECTED"
+
+
+class GenerationValidationClassification(StrEnum):
+    """Meaning of one generation result without conflating history with serving."""
+
+    PASS = "PASS"
+    FAIL = "FAIL"
+    HISTORICAL_SCHEMA_INCOMPATIBLE = "HISTORICAL_SCHEMA_INCOMPATIBLE"
+    HISTORICAL_PHYSICAL_CLEANED = "HISTORICAL_PHYSICAL_CLEANED"
+    FAILED_BUILD_INCOMPLETE = "FAILED_BUILD_INCOMPLETE"
+
+
+class ManagedValidationStatus(StrEnum):
+    """Corpus validation status with ACTIVE health as the failure boundary."""
+
+    PASS = "PASS"
+    PASS_WITH_WARNINGS = "PASS_WITH_WARNINGS"
+    FAIL = "FAIL"
 
 
 ELIGIBLE_CLEANUP_CLASSIFICATIONS = frozenset(
@@ -167,6 +188,19 @@ class ManagedGenerationValidationResult:
     valid: bool
     issues: tuple[str, ...]
     notes: tuple[str, ...]
+    classification: GenerationValidationClassification = (
+        GenerationValidationClassification.PASS
+    )
+
+    @property
+    def outcome(self) -> str:
+        """Return the operator-facing outcome for this generation."""
+
+        if self.classification is GenerationValidationClassification.PASS:
+            return "PASS" if self.valid else "FAIL"
+        if self.classification is GenerationValidationClassification.FAIL:
+            return "FAIL"
+        return "WARNING"
 
 
 @dataclass(frozen=True, slots=True)
@@ -178,6 +212,44 @@ class ManagedGenerationValidationReport:
     valid: bool
     issues: tuple[str, ...]
     generations: tuple[ManagedGenerationValidationResult, ...]
+
+    @property
+    def active_health(self) -> ManagedValidationStatus:
+        """Report whether the unique ACTIVE generation is safe to serve."""
+
+        return ManagedValidationStatus.PASS if self.valid else ManagedValidationStatus.FAIL
+
+    @property
+    def historical_findings(self) -> tuple[ManagedGenerationValidationResult, ...]:
+        """Return visible non-ACTIVE warnings and integrity findings."""
+
+        return tuple(
+            result
+            for result in self.generations
+            if result.status != "ACTIVE"
+            and (
+                result.classification is not GenerationValidationClassification.PASS
+                or not result.valid
+                or result.issues
+                or result.notes
+            )
+        )
+
+    @property
+    def historical_audit(self) -> str:
+        """Return the compact dashboard/CLI historical audit outcome."""
+
+        return "WARNINGS" if self.historical_findings else "PASS"
+
+    @property
+    def overall_status(self) -> ManagedValidationStatus:
+        """Keep ACTIVE failures critical while retaining historical visibility."""
+
+        if not self.valid:
+            return ManagedValidationStatus.FAIL
+        if self.historical_findings:
+            return ManagedValidationStatus.PASS_WITH_WARNINGS
+        return ManagedValidationStatus.PASS
 
 
 @dataclass(frozen=True, slots=True)
@@ -377,16 +449,15 @@ class ManagedIndexOperationsService:
                 )
                 for state in states
             )
-        required_results = tuple(
-            result
-            for result in results
-            if result.status == "ACTIVE"
-            or (result.status == "RETIRED" and result.physical_present)
-        )
+        active_results = tuple(result for result in results if result.status == "ACTIVE")
         return ManagedGenerationValidationReport(
             corpus_key=corpus.corpus_key,
             active_count=active_count,
-            valid=not report_issues and all(result.valid for result in required_results),
+            valid=(
+                not report_issues
+                and len(active_results) == 1
+                and active_results[0].valid
+            ),
             issues=tuple(report_issues),
             generations=results,
         )
@@ -545,6 +616,7 @@ class ManagedIndexOperationsService:
     ) -> ManagedGenerationValidationResult:
         issues: list[str] = []
         notes: list[str] = []
+        classification = GenerationValidationClassification.PASS
         physical_present = self._collection_exists(state.qdrant_collection)
         if not _is_canonical_collection(
             managed_prefix,
@@ -556,12 +628,34 @@ class ManagedIndexOperationsService:
         repository = LineageRepository(session)
         membership_count = repository.count_index_state_chunks(state.index_state_id)
         if membership_count != state.chunk_count:
-            issues.append(
-                f"index_state_chunks count {membership_count} != {state.chunk_count}"
-            )
+            if state.status == "FAILED":
+                notes.append(
+                    "FAILED build membership incomplete: "
+                    f"index_state_chunks count {membership_count} of intended "
+                    f"{state.chunk_count}"
+                )
+                classification = (
+                    GenerationValidationClassification.FAILED_BUILD_INCOMPLETE
+                )
+            else:
+                issues.append(
+                    f"index_state_chunks count {membership_count} != {state.chunk_count}"
+                )
 
         configuration: ManagedIndexConfiguration | None = None
-        if state.status in {"ACTIVE", "RETIRED"} and (
+        historical_schema_issue = (
+            _historical_schema_incompatibility(state)
+            if state.status == "RETIRED" and physical_present
+            else None
+        )
+        if historical_schema_issue is not None:
+            notes.append(
+                "HISTORICAL_SCHEMA_INCOMPATIBLE: " + historical_schema_issue
+            )
+            classification = (
+                GenerationValidationClassification.HISTORICAL_SCHEMA_INCOMPATIBLE
+            )
+        elif state.status in {"ACTIVE", "RETIRED"} and (
             state.status == "ACTIVE" or physical_present
         ):
             try:
@@ -589,8 +683,12 @@ class ManagedIndexOperationsService:
             issues.append("ACTIVE Qdrant collection is missing")
         elif state.status == "RETIRED" and not physical_present:
             notes.append("physical=cleaned")
+            classification = (
+                GenerationValidationClassification.HISTORICAL_PHYSICAL_CLEANED
+            )
         elif state.status == "FAILED" and not physical_present:
             notes.append("FAILED history has no physical collection")
+            classification = GenerationValidationClassification.FAILED_BUILD_INCOMPLETE
         elif state.status in {"READY", "BUILDING"} and not physical_present:
             issues.append(f"{state.status} Qdrant collection is missing")
 
@@ -606,8 +704,15 @@ class ManagedIndexOperationsService:
                 )
         elif physical_present and state.status == "FAILED":
             notes.append("FAILED physical collection is present and may be partial")
+            classification = GenerationValidationClassification.FAILED_BUILD_INCOMPLETE
         elif physical_present and configuration is None:
-            issues.append("physical collection cannot be validated without configuration")
+            if historical_schema_issue is None:
+                issues.append(
+                    "physical collection cannot be validated without configuration"
+                )
+
+        if issues:
+            classification = GenerationValidationClassification.FAIL
 
         return ManagedGenerationValidationResult(
             index_state_id=state.index_state_id,
@@ -616,9 +721,10 @@ class ManagedIndexOperationsService:
             qdrant_collection=state.qdrant_collection,
             physical_present=physical_present,
             deep=deep,
-            valid=not issues,
+            valid=classification is GenerationValidationClassification.PASS,
             issues=tuple(issues),
             notes=tuple(notes),
+            classification=classification,
         )
 
     def _validate_physical_shape(
@@ -914,6 +1020,40 @@ def _cleanup_state(state: IndexState) -> GenerationCleanupState:
         failed_at=state.failed_at,
         restored_from_index_state_id=state.restored_from_index_state_id,
     )
+
+
+def _historical_schema_incompatibility(state: IndexState) -> str | None:
+    """Describe RETIRED metadata that the current validator cannot verify safely."""
+
+    payload = state.index_configuration
+    if not isinstance(payload, Mapping):
+        return "persisted configuration is absent or is not an object"
+    if "pii_detector_version" not in payload:
+        return "persisted configuration predates required field pii_detector_version"
+    try:
+        configuration = parse_managed_index_configuration(
+            cast(Mapping[str, Any], payload)
+        )
+    except CorruptActiveManagedIndexError:
+        return "persisted configuration is not supported by the current schema"
+
+    incompatible: list[str] = []
+    if configuration.payload_schema_version != PAYLOAD_SCHEMA_VERSION:
+        incompatible.append("payload schema")
+    if configuration.point_id_format_version != POINT_ID_FORMAT_VERSION:
+        incompatible.append("point-ID format")
+    if configuration.bm25_implementation_version != BM25_IMPLEMENTATION_VERSION:
+        incompatible.append("BM25 implementation")
+    if configuration.bm25_tokenizer_version != BM25_TOKENIZER_VERSION:
+        incompatible.append("BM25 tokenizer")
+    if configuration.pii_detector_version != DETERMINISTIC_PII_VERSION:
+        incompatible.append("PII detector")
+    if incompatible:
+        return (
+            "persisted configuration uses unsupported runtime version(s): "
+            + ", ".join(incompatible)
+        )
+    return None
 
 
 def _configuration_for_cleanup(

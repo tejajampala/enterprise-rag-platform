@@ -215,9 +215,10 @@ class ManagedGenerationRestorationService:
                 "RESTORATION_UNAVAILABLE_PHYSICAL_CLEANED"
             )
         if not source_validation.valid:
+            findings = source_validation.issues or source_validation.notes
             raise RestorationValidationError(
                 "Historical source generation failed validation: "
-                + "; ".join(source_validation.issues)
+                + "; ".join(findings)
             )
         active_validation = self._operations.validate_generation(
             active_generation,
