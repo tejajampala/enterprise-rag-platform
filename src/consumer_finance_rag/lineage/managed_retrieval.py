@@ -117,20 +117,92 @@ def build_managed_retrieval_runtime(
             f"Resolved managed index {active.index_state_id} is {active.status}, not ACTIVE"
         )
 
-    configuration, sparse_encoder = validate_active_managed_index_metadata(active)
+    return _build_managed_retrieval_runtime_for_state(
+        settings,
+        corpus.qdrant_collection_prefix,
+        active,
+        qdrant_client=qdrant_client,
+        embedding_provider=embedding_provider,
+        reranker_provider=reranker_provider,
+        tracer=tracer,
+        telemetry_sink=telemetry_sink,
+    )
+
+
+def build_managed_retrieval_runtime_for_generation(
+    settings: AppSettings,
+    repository: LineageRepository,
+    generation: int,
+    *,
+    qdrant_client: QdrantClient | None = None,
+    embedding_provider: EmbeddingProvider | None = None,
+    reranker_provider: RerankerProvider | None = None,
+    tracer: Tracer | None = None,
+    telemetry_sink: RetrievalTelemetrySink | None = None,
+) -> ManagedRetrievalRuntime:
+    """Resolve one explicit current-compatible ACTIVE/RETIRED generation read-only."""
+
+    if generation <= 0:
+        raise ManagedRetrievalError("Managed generation must be positive")
+    corpus = repository.get_corpus_by_key(settings.managed_ingestion.corpus_key)
+    if corpus is None:
+        raise NoActiveManagedIndexError(
+            f"Managed corpus {settings.managed_ingestion.corpus_key!r} is not initialized"
+        )
+    state = next(
+        (
+            item
+            for item in repository.list_index_states(corpus.corpus_id)
+            if item.generation == generation
+        ),
+        None,
+    )
+    if state is None:
+        raise ManagedRetrievalError(
+            f"Managed generation g{generation:06d} does not exist"
+        )
+    if state.status not in {"ACTIVE", "RETIRED"}:
+        raise ManagedRetrievalError(
+            f"Managed generation g{generation:06d} is {state.status}; "
+            "only ACTIVE or RETIRED generations can be evaluated"
+        )
+    return _build_managed_retrieval_runtime_for_state(
+        settings,
+        corpus.qdrant_collection_prefix,
+        state,
+        qdrant_client=qdrant_client,
+        embedding_provider=embedding_provider,
+        reranker_provider=reranker_provider,
+        tracer=tracer,
+        telemetry_sink=telemetry_sink,
+    )
+
+
+def _build_managed_retrieval_runtime_for_state(
+    settings: AppSettings,
+    collection_prefix: str,
+    state: IndexState,
+    *,
+    qdrant_client: QdrantClient | None,
+    embedding_provider: EmbeddingProvider | None,
+    reranker_provider: RerankerProvider | None,
+    tracer: Tracer | None,
+    telemetry_sink: RetrievalTelemetrySink | None,
+) -> ManagedRetrievalRuntime:
+    configuration, sparse_encoder = validate_active_managed_index_metadata(state)
     try:
         expected_collection = managed_generation_collection_name(
-            corpus.qdrant_collection_prefix,
-            active.generation,
+            collection_prefix,
+            state.generation,
         )
     except ManagedQdrantError as exc:
         raise CorruptActiveManagedIndexError(
             f"Managed corpus generation naming is invalid: {exc}"
         ) from exc
-    if active.qdrant_collection != expected_collection:
+    if state.qdrant_collection != expected_collection:
         raise CorruptActiveManagedIndexError(
             "ACTIVE Qdrant collection does not match its managed corpus prefix/generation: "
-            f"{active.qdrant_collection!r} != {expected_collection!r}"
+            f"{state.qdrant_collection!r} != {expected_collection!r}"
         )
 
     embedding = embedding_provider or HuggingFaceEmbeddingProvider(
@@ -140,7 +212,7 @@ def build_managed_retrieval_runtime(
         settings.models.embedding.query_prompt_name,
     )
     _validate_embedding_compatibility(
-        active,
+        state,
         configuration,
         settings.models.embedding,
         embedding,
@@ -153,14 +225,14 @@ def build_managed_retrieval_runtime(
     client = qdrant_client or QdrantClient(url=settings.qdrant.url)
     validate_active_managed_physical_collection(
         client,
-        managed_prefix=corpus.qdrant_collection_prefix,
-        active=active,
+        managed_prefix=collection_prefix,
+        active=state,
         configuration=configuration,
     )
 
     managed_qdrant_settings = settings.qdrant.model_copy(
         update={
-            "collection_name": active.qdrant_collection,
+            "collection_name": state.qdrant_collection,
             "dense_vector_name": configuration.dense_vector_name,
             "sparse_vector_name": configuration.sparse_vector_name,
             "hnsw_m": configuration.hnsw_m,
@@ -179,29 +251,29 @@ def build_managed_retrieval_runtime(
         sparse_encoder=sparse_encoder,
         settings=settings.retrieval,
         tracer=tracer,
-        collection_name=active.qdrant_collection,
+        collection_name=state.qdrant_collection,
         access_control_enabled=True,
         pii_handling_enabled=True,
         telemetry_context=RetrievalTelemetryContext(
             profile="managed",
-            index_state_id=active.index_state_id,
-            generation=active.generation,
-            qdrant_collection=active.qdrant_collection,
+            index_state_id=state.index_state_id,
+            generation=state.generation,
+            qdrant_collection=state.qdrant_collection,
         ),
         telemetry_sink=telemetry_sink,
     )
     return ManagedRetrievalRuntime(
-        index_state_id=active.index_state_id,
-        generation=active.generation,
-        qdrant_collection=active.qdrant_collection,
-        snapshot_hash=active.snapshot_hash,
-        embedding_fingerprint=active.embedding_fingerprint,
-        chunking_fingerprint=active.chunking_fingerprint,
+        index_state_id=state.index_state_id,
+        generation=state.generation,
+        qdrant_collection=state.qdrant_collection,
+        snapshot_hash=state.snapshot_hash,
+        embedding_fingerprint=state.embedding_fingerprint,
+        chunking_fingerprint=state.chunking_fingerprint,
         index_configuration_fingerprint=cast(
-            str, active.index_configuration_fingerprint
+            str, state.index_configuration_fingerprint
         ),
-        document_count=active.document_count,
-        chunk_count=active.chunk_count,
+        document_count=state.document_count,
+        chunk_count=state.chunk_count,
         retrieval_service=retrieval,
     )
 

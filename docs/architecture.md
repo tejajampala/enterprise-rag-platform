@@ -833,6 +833,78 @@ model identity, latency, and token counts but not answer text. The managed evalu
 `APPROVED_PUBLIC_EVALUATION`, and its content-bearing cases remain limited to the reviewed PUBLIC
 evaluation dataset.
 
+## Phase 4 drift and regression monitoring
+
+Phase 4 is an assessment layer over existing control-plane and evaluation contracts, not another
+indexer, retriever, or judge framework.
+
+```mermaid
+flowchart LR
+    B[(Approved baseline generation)] --> S[Immutable snapshot comparison]
+    C[(Candidate or current generation)] --> S
+    V[Existing managed validation] --> S
+    S --> K{Compatible evidence?}
+    K -->|yes| R[Existing retrieval-quality evaluator]
+    K -->|no| I[INCOMPATIBLE or INSUFFICIENT_DATA]
+    R --> A[Optional existing managed answer evaluator]
+    T[Equivalent safe telemetry windows] --> O[Aggregate operational trends]
+    S --> F[Classified findings]
+    R --> F
+    A --> F
+    O --> F
+    F --> J[managed-drift-assessment-v1]
+    J --> D[Private read-only dashboard]
+```
+
+`drift.py` loads two immutable generation snapshots with read-only SQL. The baseline is explicitly
+selected by the operator; the candidate defaults to the current ACTIVE generation and is resolved
+once. Snapshot identity includes generation/index-state IDs, source snapshot hash, configuration,
+embedding and chunking fingerprints, BM25 hashes, intended counts, ingestion-run identity, and the
+authoritative-snapshot flag. Access groups are reduced to a one-way policy fingerprint and never
+enter the report.
+
+Source drift compares stable source keys and separates new, changed, unchanged, and deleted
+documents. A changed source is further split into content change and metadata-only change; access
+policy changes are counted as governance metadata changes. Deletion is reported only when the
+candidate ingestion run declared an authoritative snapshot. With a partial snapshot, absent sources
+become `unassessed_missing`, never `DELETED`. Category-count deltas are aggregate. Source freshness
+is available only when every compared `source_version` is a strict ISO date/timestamp; opaque labels
+are not reinterpreted as time.
+
+Index compatibility checks embedding and chunking fingerprints plus BM25, PII-detector, Qdrant
+payload-schema, and point-ID-format identities. Unsupported historical schemas remain explicit and
+cannot be evaluated by a current runtime. Current-compatible historical RETIRED generations can be
+opened by the same managed retrieval builder used for ACTIVE, provided their physical collection is
+still available. FAILED, missing, legacy-incompatible, or corrupt generations are not silently
+recomputed and are not made restorable.
+
+Retrieval regression delegates to `compare_quality_reports()` and
+`evaluate_quality_thresholds()`. Both generations use the same reviewed dataset and K; reports must
+have compatible case identities. The assessment records Recall@K, MRR, hit-rate deltas, improved and
+regressed case IDs, newly missed expected identities, and ACL-negative-case outcomes. No new ground
+truth is inferred.
+
+Answer regression delegates to `evaluation/managed_rag.py` and its existing MLflow GenAI and RAGAS
+adapters. Generation, MLflow judges, and RAGAS are opt-in independently. Only common numeric metrics
+from completed stages are compared, and dataset plus embedding, reranker, generation, and judge
+model identities must match. Skipped, unavailable, incompatible, and failed stages remain visible;
+visitor questions and unrestricted content are never judge inputs.
+
+Operational trends accept two explicitly supplied `operational-telemetry-window-v1` files of equal
+duration. Each contains only safe samples: timestamps, success, generation, stage latency, candidate
+and redaction counts, and optional token counts. A configured minimum sample count is required before
+comparison. The report includes request/failure counts, means, failure-rate and latency deltas, and
+generation distribution. It does not contain query/answer/context text, principal IDs, access-group
+names, or matched PII, and it does not claim semantic query drift from metadata.
+
+Findings are typed separately as `STRUCTURAL_FAILURE`, `GOVERNANCE_FAILURE`,
+`QUALITY_REGRESSION`, `DISTRIBUTION_WARNING`, `INSUFFICIENT_DATA`, or
+`NO_REGRESSION_DETECTED`. Each carries fixed investigation guidance. These are evidence summaries,
+not publication gates or automatic restore/delete/rebuild/refit commands. Optional MLflow reporting
+creates at most one metadata-only assessment run; an unavailable tracking server does not change or
+fabricate the assessment. Production alert routing, schedules, long-term telemetry storage, and
+automatic orchestration remain future work.
+
 ## MLflow GenAI and RAGAS
 
 `evaluation/mlflow_genai.py` is the only MLflow judge/dataset adapter. Judge construction calls

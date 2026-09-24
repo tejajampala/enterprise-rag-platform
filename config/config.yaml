@@ -84,6 +84,14 @@ public_showcase:
   rate_window_seconds: 3600
   max_concurrent_requests: 2
 
+drift_monitoring:
+  max_recall_drop: 0.0
+  max_mrr_drop: 0.0
+  max_answer_metric_drop: 0.0
+  minimum_operational_samples: 20
+  max_failure_rate_increase: 0.05
+  max_mean_latency_increase_ratio: 0.25
+
 mlflow:
   enabled: true
   tracking_uri: http://localhost:5000

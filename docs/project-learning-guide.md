@@ -296,6 +296,67 @@ or failed judge remains visibly non-successful; the UI never turns it into a zer
 See [system-design-walkthrough.md](system-design-walkthrough.md) for the five full demonstration
 scenarios and [architecture.md](architecture.md) for validation/cleanup semantics.
 
+## Phase 4: drift and regression monitoring
+
+The monitoring milestone asks a narrower question than evaluation: "is this candidate acceptably
+equivalent to an approved baseline, and what evidence is missing?" It does not create a second
+retrieval path or make a lifecycle decision.
+
+The real read-only call sequence is:
+
+```text
+scripts/assess_managed_drift.py:main()
+  -> drift.load_generation_snapshot()                    # baseline + candidate
+  -> ManagedIndexOperationsService.validate_generation() # existing integrity checks
+  -> drift.assess_structural_drift()
+  -> managed_retrieval.build_managed_retrieval_runtime_for_generation()
+  -> managed_rag.evaluate_managed_rag()                  # same reviewed cases, same pipeline
+  -> drift.retrieval_report_from_managed_evaluation()
+  -> drift.assess_retrieval_regression()                 # existing comparison/threshold logic
+  -> drift.assess_answer_regression()                    # only after explicit generation
+  -> drift.assess_operational_trends()                   # only supplied safe windows
+  -> drift.build_drift_report()
+  -> drift.write_drift_report()
+  -> drift.log_drift_report()                            # optional one MLflow run
+```
+
+See [drift.py](../src/consumer_finance_rag/drift.py),
+[assess_managed_drift.py](../scripts/assess_managed_drift.py), and the reused
+[managed_rag.py](../src/consumer_finance_rag/evaluation/managed_rag.py). The historical runtime
+builder validates a RETIRED generation against the current schema and reads its exact physical
+collection. It does not re-read ACTIVE, publish, restore, or regenerate missing vectors.
+
+Concrete project examples:
+
+- **Data drift:** a new CFPB source produces `NEW=1`; a changed normalized body produces
+  `content_changed=1`; a title/category/policy-only change produces `metadata_only_changed=1`.
+  Missing sources count as `DELETED` only for an authoritative candidate snapshot.
+- **Index compatibility drift:** changing the embedding identity, chunking identity, BM25
+  configuration, PII detector, payload schema, or point-ID format makes the quality comparison
+  `INCOMPATIBLE`. A legacy RETIRED generation is not relabeled as valid or upgraded.
+- **Retrieval drift:** the reviewed case set is run against both pinned collections. The existing
+  report comparator supplies Recall@K, MRR and hit-rate deltas plus case IDs. An ACL-negative case
+  that retrieves its protected expected identity becomes a `GOVERNANCE_FAILURE`.
+- **Answer-quality drift:** only generated reports with the same reviewed dataset and embedding,
+  reranker, generation and judge identities are compared. Common completed MLflow GenAI/RAGAS
+  numeric metrics are delta-scored. Judges are never started by basic monitoring or the dashboard.
+- **Operational drift:** equal-duration safe telemetry windows compare failures, stage latency,
+  candidate/redaction counts, tokens and serving-generation distribution after the minimum sample
+  rule. They cannot establish semantic query drift because query text is intentionally absent.
+
+The default configuration is intentionally strict: no Recall@K, MRR, or answer-metric drop; at
+least 20 operational samples in each window; a warning above a 0.05 failure-rate increase or 25%
+mean-latency increase. These are review thresholds, not automatic promotion gates. A missing
+historical collection, unavailable MLflow server, failed judge, incompatible dataset/model, or
+small sample is preserved as unavailable/incompatible/failed/insufficient evidence instead of a
+score.
+
+The six outcome categories lead to human investigation: structural failures block confidence in
+the candidate; governance failures are potential security incidents; quality regressions require
+case and metric review; distribution warnings require confirming expected source/traffic change;
+insufficient data requires compatible evidence; no regression detected records only what was
+actually assessed. None invokes publication, restoration, cleanup, rebuilding, or refitting.
+
 ## J. Interview explanations
 
 ### 30 seconds

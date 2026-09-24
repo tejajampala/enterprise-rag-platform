@@ -7,6 +7,19 @@ from pathlib import Path
 from uuid import UUID
 
 from consumer_finance_rag.config import MLflowSettings
+from consumer_finance_rag.drift import (
+    AnswerRegressionAssessment,
+    AssessmentStatus,
+    DriftThresholds,
+    EvaluationIdentity,
+    GenerationIdentity,
+    GenerationSnapshot,
+    OperationalTrendAssessment,
+    PhysicalValidationSummary,
+    RetrievalRegressionAssessment,
+    assess_structural_drift,
+    build_drift_report,
+)
 from consumer_finance_rag.lineage.index_operations import (
     CleanupClassification,
     GenerationCleanupCandidate,
@@ -21,8 +34,14 @@ from consumer_finance_rag.operations_dashboard import (
     collect_operations_snapshot,
     compare_quality_for_dashboard,
     comparison_summary,
+    drift_finding_rows,
+    drift_identity_rows,
+    drift_metric_rows,
+    drift_operational_summary,
+    drift_source_summary,
     generation_history_rows,
     inspect_mlflow,
+    load_drift_report_json,
     load_quality_report_json,
     probe_component,
     quality_summary,
@@ -431,6 +450,117 @@ def test_quality_report_loading_summary_and_existing_comparison_helpers() -> Non
     assert compared["threshold_result"] == "PASS"
     assert view.comparison.cases_improved == ("safe-case",)
     assert view.comparison.newly_recovered_cases == ("safe-case",)
+
+
+def test_drift_report_loading_and_views_are_metadata_only() -> None:
+    def snapshot(generation: int) -> GenerationSnapshot:
+        return GenerationSnapshot(
+            identity=GenerationIdentity(
+                generation=generation,
+                index_state_id=UUID(int=generation),
+                status="ACTIVE" if generation == 4 else "RETIRED",
+                qdrant_collection=f"consumer_finance_managed_g{generation:06d}",
+                snapshot_hash=f"snapshot-{generation}",
+                index_configuration_fingerprint="configuration-a",
+                embedding_fingerprint="embedding-a",
+                chunking_fingerprint="chunking-a",
+                bm25_state_hash="bm25-a",
+                bm25_corpus_hash="corpus-a",
+                document_count=0,
+                chunk_count=0,
+                ingestion_run_id=UUID(int=100 + generation),
+                authoritative_snapshot=True,
+            ),
+            index_configuration={
+                "bm25": {"implementation_version": "bm25-v1"},
+                "pii_detector_version": "pii-v1",
+                "payload_schema_version": "managed-qdrant-payload-v3",
+                "point_id_format_version": "point-v1",
+            },
+            documents=(),
+            membership_count=0,
+        )
+
+    def validation(generation: int) -> PhysicalValidationSummary:
+        return PhysicalValidationSummary(
+            generation=generation,
+            status="ACTIVE" if generation == 4 else "RETIRED",
+            validation_outcome="PASS",
+            classification="PASS",
+            physical_present=True,
+            deep_validation=False,
+            issue_count=0,
+            note_count=0,
+            membership_count=0,
+            physical_point_count=0,
+            governance_failure_detected=False,
+        )
+
+    baseline = snapshot(3)
+    candidate = snapshot(4)
+    thresholds = DriftThresholds(
+        max_recall_drop=0,
+        max_mrr_drop=0,
+        max_answer_metric_drop=0,
+        minimum_operational_samples=20,
+        max_failure_rate_increase=0.05,
+        max_mean_latency_increase_ratio=0.25,
+    )
+    structural = assess_structural_drift(
+        baseline,
+        candidate,
+        baseline_validation=validation(3),
+        candidate_validation=validation(4),
+        assessed_at=NOW,
+    )
+    report = build_drift_report(
+        corpus_key=CORPUS,
+        baseline=baseline,
+        candidate=candidate,
+        evaluation=EvaluationIdentity(
+            dataset_name="managed-public",
+            dataset_version="1",
+            dataset_format_version="managed-rag-evaluation-dataset-v1",
+            dataset_privacy_classification="PUBLIC_SYNTHETIC_REVIEWED",
+            embedding_model="embedding",
+            reranker_model="reranker",
+        ),
+        thresholds=thresholds,
+        structural=structural,
+        retrieval=RetrievalRegressionAssessment(
+            status=AssessmentStatus.NOT_REQUESTED
+        ),
+        answer_quality=AnswerRegressionAssessment(
+            status=AssessmentStatus.NOT_REQUESTED
+        ),
+        operational_trends=OperationalTrendAssessment(
+            status=AssessmentStatus.UNAVAILABLE,
+            reason="No safe aggregate windows were supplied.",
+        ),
+        generated_at=NOW,
+    )
+
+    loaded = load_drift_report_json(report.model_dump_json())
+    rendered = repr(
+        (
+            drift_identity_rows(loaded),
+            drift_source_summary(loaded),
+            drift_metric_rows(loaded),
+            drift_operational_summary(loaded),
+            drift_finding_rows(loaded),
+        )
+    )
+
+    assert [row["role"] for row in drift_identity_rows(loaded)] == [
+        "baseline",
+        "candidate",
+    ]
+    assert drift_source_summary(loaded)["unchanged"] == 0
+    assert drift_metric_rows(loaded) == ()
+    assert drift_operational_summary(loaded)["status"] == "UNAVAILABLE"
+    assert "INSUFFICIENT_DATA" in rendered
+    for forbidden in ("raw question", "raw answer", "chunk text", "access-group"):
+        assert forbidden not in rendered
 
 
 class UnavailableMLflowClient:
