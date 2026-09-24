@@ -11,6 +11,7 @@ from urllib.parse import urlsplit, urlunsplit
 from uuid import UUID
 
 from consumer_finance_rag.config import MLflowSettings
+from consumer_finance_rag.drift import ManagedDriftAssessmentReport, load_drift_report
 from consumer_finance_rag.lineage.index_operations import (
     CleanupClassification,
     GenerationCleanupPlan,
@@ -268,6 +269,133 @@ def load_quality_report_json(value: str | bytes) -> RetrievalQualityReport:
     """Validate a versioned safe report; unknown fields are never rendered."""
 
     return RetrievalQualityReport.model_validate_json(value)
+
+
+def load_drift_report_json(value: str | bytes) -> ManagedDriftAssessmentReport:
+    """Validate the versioned, metadata-only drift assessment contract."""
+
+    return load_drift_report(value)
+
+
+def drift_identity_rows(report: ManagedDriftAssessmentReport) -> tuple[TableRow, ...]:
+    """Render only immutable baseline/candidate identity metadata."""
+
+    return tuple(
+        {
+            "role": role,
+            "generation": identity.generation,
+            "status": safe_identifier(identity.status),
+            "index_state_id": str(identity.index_state_id),
+            "collection": safe_identifier(identity.qdrant_collection),
+            "document_count": identity.document_count,
+            "chunk_count": identity.chunk_count,
+            "authoritative_snapshot": identity.authoritative_snapshot,
+        }
+        for role, identity in (
+            ("baseline", report.baseline),
+            ("candidate", report.candidate),
+        )
+    )
+
+
+def drift_source_summary(report: ManagedDriftAssessmentReport) -> TableRow:
+    """Summarize source and physical deltas without document-level content."""
+
+    changes = report.structural.source_changes
+    return {
+        "new": changes.new_count,
+        "changed": changes.changed_count,
+        "unchanged": changes.unchanged_count,
+        "deleted": changes.deleted_count,
+        "content_changed": changes.content_changed_count,
+        "metadata_only_changed": changes.metadata_only_changed_count,
+        "governance_metadata_changed": changes.governance_metadata_changed_count,
+        "unassessed_missing": changes.unassessed_missing_count,
+        "deletion_detection_performed": changes.deletion_detection_performed,
+        "document_count_delta": report.structural.document_count_delta,
+        "intended_chunk_count_delta": report.structural.intended_chunk_count_delta,
+        "membership_count_delta": report.structural.membership_count_delta,
+        "physical_point_count_delta": report.structural.physical_point_count_delta,
+    }
+
+
+def drift_metric_rows(report: ManagedDriftAssessmentReport) -> tuple[TableRow, ...]:
+    """Present retrieval and answer deltas only when the assessment produced them."""
+
+    rows: list[TableRow] = []
+    comparison = report.retrieval.comparison
+    baseline = report.retrieval.baseline
+    candidate = report.retrieval.candidate
+    if comparison is not None and baseline is not None and candidate is not None:
+        rows.extend(
+            (
+                {
+                    "assessment": "retrieval",
+                    "metric": "recall_at_k",
+                    "baseline": baseline.recall_at_k,
+                    "candidate": candidate.recall_at_k,
+                    "delta": comparison.recall_delta,
+                },
+                {
+                    "assessment": "retrieval",
+                    "metric": "mrr",
+                    "baseline": baseline.mrr,
+                    "candidate": candidate.mrr,
+                    "delta": comparison.mrr_delta,
+                },
+                {
+                    "assessment": "retrieval",
+                    "metric": "hit_rate",
+                    "baseline": baseline.hit_rate,
+                    "candidate": candidate.hit_rate,
+                    "delta": comparison.hit_rate_delta,
+                },
+            )
+        )
+    rows.extend(
+        {
+            "assessment": delta.backend,
+            "metric": safe_identifier(delta.metric),
+            "baseline": delta.baseline,
+            "candidate": delta.candidate,
+            "delta": delta.delta,
+        }
+        for delta in report.answer_quality.metric_deltas
+    )
+    return tuple(rows)
+
+
+def drift_finding_rows(report: ManagedDriftAssessmentReport) -> tuple[TableRow, ...]:
+    """Render classified findings and their fixed operator response guidance."""
+
+    return tuple(
+        {
+            "category": finding.category.value,
+            "code": safe_identifier(finding.code),
+            "summary": _safe_diagnostic(finding.summary),
+            "operator_response": _safe_diagnostic(finding.operator_response),
+        }
+        for finding in report.findings
+    )
+
+
+def drift_operational_summary(report: ManagedDriftAssessmentReport) -> TableRow:
+    """Render aggregate operational status without request-level records."""
+
+    trend = report.operational_trends
+    return {
+        "status": trend.status.value,
+        "baseline_requests": (
+            trend.baseline.request_count if trend.baseline is not None else None
+        ),
+        "candidate_requests": (
+            trend.candidate.request_count if trend.candidate is not None else None
+        ),
+        "failure_rate_delta": trend.failure_rate_delta,
+        "mean_total_latency_delta_ms": trend.mean_total_latency_delta_ms,
+        "mean_total_latency_increase_ratio": trend.mean_total_latency_increase_ratio,
+        "warning_count": len(trend.warnings),
+    }
 
 
 def quality_summary(report: RetrievalQualityReport) -> TableRow:

@@ -243,7 +243,38 @@ The generated report contains identities, metrics, statuses, latency, and token 
 question, answer, context, PII values, principals, groups, and judge rationale text. MLflow tracing
 and judges are disabled unless explicitly requested; the combined command uses one evaluation run.
 
-## 8. Open the read-only operations dashboard
+## 8. Assess drift and regression against an approved baseline
+
+Select a known, reviewed RETIRED generation whose physical collection is still present. Start with
+the model-free assessment:
+
+```powershell
+# READ ONLY for PostgreSQL/Qdrant; writes one metadata-only local JSON report.
+uv run python scripts/assess_managed_drift.py --baseline-generation 3 `
+  --skip-retrieval-evaluation
+```
+
+The candidate defaults to ACTIVE and is pinned once. The report shows source NEW/CHANGED/UNCHANGED/
+DELETED counts, content versus metadata-only changes, category/count deltas, compatibility,
+physical validation, and unavailable evaluation dimensions. A non-authoritative candidate never
+turns an absent source into a deletion.
+
+If both generations use the current compatible schema and both physical collections exist, run the
+same approved cases through the existing deterministic retrieval evaluator:
+
+```powershell
+# READ ONLY for PostgreSQL/Qdrant; loads embedding/reranker models, but calls no Bedrock model.
+uv run python scripts/assess_managed_drift.py --baseline-generation 3
+```
+
+Only an explicit `--generate-answers` invokes Bedrock. Only explicit `--with-mlflow-judges` or
+`--with-ragas` invokes a judge; `--log-mlflow` adds one metadata-only assessment run. Do not use
+those flags during an offline or no-cost demonstration. An incompatible schema/model/dataset,
+missing historical collection, failed judge, absent telemetry window, or insufficient sample size
+is reported as incomplete evidence, never converted into a score. Findings recommend an operator
+investigation and execute no lifecycle action.
+
+## 9. Open the read-only operations dashboard
 
 ```powershell
 # READ ONLY dashboard; model-free and contains no lifecycle mutation controls.
@@ -255,7 +286,12 @@ status/provenance, cleanup classifications, safe quality reports, and optional M
 availability. Deep validation occurs only when explicitly requested. The key readiness distinction
 is `ACTIVE validation: PASS` versus `Historical audit: WARNINGS`.
 
-## 9. Demonstrate lifecycle planning without executing it
+Upload the generated `managed-drift-assessment-v1` report under **Drift & regression** to show its
+baseline/candidate identity, source/index changes, metric states, operational aggregates, and typed
+findings. Uploading a report does not rerun evaluation. This section exists only in the private
+operator dashboard, not the public showcase.
+
+## 10. Demonstrate lifecycle planning without executing it
 
 ```powershell
 # READ ONLY: reports protected, retained, recent, eligible, and orphan collections.
@@ -269,7 +305,7 @@ Do not add `--confirm` during this demonstration. A cleanup plan never deletes P
 A restoration plan validates the historical generation and proposes a new monotonic generation;
 it never reactivates the old row or rolls back source lineage.
 
-## 10. What to show an interviewer
+## 11. What to show an interviewer
 
 1. The ingestion dry run and apply output: stable source identity plus immutable versions.
 2. Publication output: BM25 action, dense computed/reused counts, generation, and collection.
@@ -277,7 +313,9 @@ it never reactivates the old row or rolls back source lineage.
 4. One managed query: generation-pinned identity, ACL-before-ranking, redacted final context, and
    safe request telemetry.
 5. A deterministic quality report and the dashboard's separate ACTIVE and historical status.
-6. Cleanup and restoration plans only, emphasizing the explicit confirmation boundary.
+6. A model-free drift report, then a compatible retrieval comparison when a retained collection is
+   available; point out explicit insufficient-data states.
+7. Cleanup and restoration plans only, emphasizing the explicit confirmation boundary.
 
 The five change scenarios and their exact persistence/reuse consequences are detailed in
 [System design walkthrough](system-design-walkthrough.md#interview-ready-change-scenarios).

@@ -21,6 +21,7 @@ loopback. The project provisions no AWS hosting infrastructure.
 - Deterministic PII classification and post-rerank redaction.
 - Request-level safe telemetry and request-bound MLflow trace correlation.
 - Separate deterministic retrieval, generated-answer, MLflow GenAI, and RAGAS evaluation results.
+- Read-only baseline/candidate drift assessment with explicit compatibility and evidence states.
 - Read-only validation, cleanup planning, restoration planning, and operations views.
 
 ## Architecture
@@ -87,6 +88,11 @@ flowchart TB
     M --> J
     A --> J
 ```
+
+Phase 4 compares an operator-approved baseline generation with a candidate (ACTIVE by default).
+It combines immutable lineage, existing generation validation, existing retrieval-quality reports,
+optional managed answer evaluation, and optional safe aggregate telemetry. Findings never publish,
+restore, delete, rebuild, or refit an index.
 
 ### Local public/private deployment
 
@@ -189,6 +195,40 @@ The managed evaluator pins ACTIVE once, accepts only reviewed synthetic PUBLIC c
 production ACL/PII pipeline, and writes a versioned metadata-only report. The public Evaluation tab
 reads existing reports only; it never starts generation or judges. Phase 2 reports remain visible
 separately and preserve the fixture/evaluation compatibility paths.
+
+## Drift and regression assessment
+
+The basic assessment is read-only and does not initialize embedding, reranker, Bedrock, or judge
+models:
+
+```powershell
+uv run python scripts/assess_managed_drift.py --baseline-generation 3 `
+  --skip-retrieval-evaluation
+```
+
+Omit `--skip-retrieval-evaluation` to run the existing deterministic managed retrieval evaluator
+against the same reviewed cases for both physically available, compatible generations. Answer
+generation and each judge backend remain separate, explicit, potentially billable choices:
+
+```powershell
+uv run python scripts/assess_managed_drift.py --baseline-generation 3
+uv run python scripts/assess_managed_drift.py --baseline-generation 3 --generate-answers
+uv run python scripts/assess_managed_drift.py --baseline-generation 3 --generate-answers `
+  --with-mlflow-judges --with-ragas --log-mlflow
+```
+
+The versioned `managed-drift-assessment-v1` JSON is metadata-only. The private operations
+dashboard can display it under **Drift & regression**; the public app has no assessment controls or
+private findings. Current default thresholds allow no Recall@K, MRR, or answer-metric drop, require
+20 samples per equivalent operational window, warn above a 0.05 failure-rate increase, and warn
+above a 25% mean-latency increase. Configure them under `drift_monitoring`; thresholds classify
+evidence and never trigger lifecycle actions.
+
+Comparisons are rejected when the generation schemas, embedding/chunking identities, BM25
+configuration, PII detector, payload schema, point-ID format, reviewed dataset, or evaluation-model
+identity are not equivalent. Missing collections, skipped judges, unavailable MLflow, and too-small
+telemetry windows remain explicit `UNAVAILABLE`, `NOT_REQUESTED`, `FAILED`, `INCOMPATIBLE`, or
+`INSUFFICIENT_DATA` states rather than synthetic scores.
 
 ## Runtime profiles
 

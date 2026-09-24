@@ -21,8 +21,10 @@ from consumer_finance_rag.lineage.managed_retrieval import (
     CorruptActiveManagedIndexError,
     ManagedCollectionUnavailableError,
     ManagedEmbeddingCompatibilityError,
+    ManagedRetrievalError,
     NoActiveManagedIndexError,
     build_managed_retrieval_runtime,
+    build_managed_retrieval_runtime_for_generation,
 )
 from consumer_finance_rag.lineage.managed_vector_store import (
     managed_generation_collection_name,
@@ -355,6 +357,49 @@ def test_non_active_generations_are_never_selected(status: str) -> None:
     seed_generation(engine, app_settings, status=status)
     with pytest.raises(NoActiveManagedIndexError, match="no ACTIVE"):
         build(engine, app_settings, QdrantClient(":memory:"))
+    engine.dispose()
+
+
+def test_explicit_historical_runtime_accepts_only_current_compatible_retired() -> None:
+    app_settings = settings()
+    engine = database()
+    _state_id, _corpus_id, encoder = seed_generation(
+        engine, app_settings, status="RETIRED"
+    )
+    client = QdrantClient(":memory:")
+    collection = create_physical_collection(client, app_settings, encoder)
+
+    with Session(engine) as session:
+        runtime = build_managed_retrieval_runtime_for_generation(
+            app_settings,
+            LineageRepository(session),
+            1,
+            qdrant_client=client,
+            embedding_provider=FakeEmbeddingProvider(
+                app_settings.models.embedding.model
+            ),
+            reranker_provider=FakeReranker(),
+        )
+
+    assert runtime.generation == 1
+    assert runtime.qdrant_collection == collection
+    engine.dispose()
+
+
+def test_explicit_historical_runtime_rejects_failed_build() -> None:
+    app_settings = settings()
+    engine = database()
+    seed_generation(engine, app_settings, status="FAILED")
+
+    with Session(engine) as session, pytest.raises(
+        ManagedRetrievalError, match="only ACTIVE or RETIRED"
+    ):
+        build_managed_retrieval_runtime_for_generation(
+            app_settings,
+            LineageRepository(session),
+            1,
+            qdrant_client=QdrantClient(":memory:"),
+        )
     engine.dispose()
 
 

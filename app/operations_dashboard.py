@@ -26,8 +26,14 @@ from consumer_finance_rag.operations_dashboard import (
     collect_operations_snapshot,
     compare_quality_for_dashboard,
     comparison_summary,
+    drift_finding_rows,
+    drift_identity_rows,
+    drift_metric_rows,
+    drift_operational_summary,
+    drift_source_summary,
     generation_history_rows,
     inspect_mlflow,
+    load_drift_report_json,
     load_quality_report_json,
     probe_component,
     quality_summary,
@@ -334,6 +340,94 @@ def _display_quality() -> None:
     )
 
 
+def _display_drift() -> None:
+    st.header("Drift & regression")
+    st.caption(
+        "Read-only view of an existing managed-drift-assessment-v1 report. The dashboard "
+        "does not evaluate, publish, restore, rebuild, or delete a generation."
+    )
+    uploaded = st.file_uploader(
+        "Upload a safe managed-drift-assessment-v1 JSON report",
+        type=["json"],
+        key="managed_drift_report",
+    )
+    if uploaded is None:
+        st.info(
+            "Generate a report with scripts/assess_managed_drift.py, then upload it here."
+        )
+        return
+    try:
+        report = load_drift_report_json(uploaded.getvalue())
+    except Exception:
+        st.error("The supplied file is not a valid managed-drift-assessment-v1 report.")
+        return
+
+    st.subheader("Assessment identity")
+    st.dataframe(
+        list(drift_identity_rows(report)),
+        hide_index=True,
+        use_container_width=True,
+    )
+    st.caption(
+        f"Dataset {safe_identifier(report.evaluation.dataset_name)} / "
+        f"{safe_identifier(report.evaluation.dataset_version)}; generated "
+        f"{report.generated_at.isoformat()}."
+    )
+
+    st.subheader("Source and index change")
+    st.dataframe(
+        [drift_source_summary(report)],
+        hide_index=True,
+        use_container_width=True,
+    )
+    compatibility = report.structural.index_compatibility
+    if compatibility.comparison_supported:
+        st.success("Index configurations are compatible for regression comparison.")
+    else:
+        st.warning(
+            "Index configurations are incompatible; quality comparisons are not treated as "
+            "valid."
+        )
+    st.write(
+        {
+            "embedding": compatibility.embedding_fingerprint_match,
+            "chunking": compatibility.chunking_fingerprint_match,
+            "BM25": compatibility.bm25_configuration_match,
+            "PII detector": compatibility.pii_detector_version_match,
+            "payload schema": compatibility.payload_schema_version_match,
+        }
+    )
+
+    st.subheader("Quality assessments")
+    status_columns = st.columns(3)
+    status_columns[0].metric("Retrieval", report.retrieval.status.value)
+    status_columns[1].metric("Answer quality", report.answer_quality.status.value)
+    status_columns[2].metric(
+        "Operational trends", report.operational_trends.status.value
+    )
+    metrics = drift_metric_rows(report)
+    if metrics:
+        st.dataframe(list(metrics), hide_index=True, use_container_width=True)
+    else:
+        st.info("No comparable retrieval or answer-quality metrics were produced.")
+    st.dataframe(
+        [drift_operational_summary(report)],
+        hide_index=True,
+        use_container_width=True,
+    )
+
+    st.subheader("Classified findings")
+    st.dataframe(
+        list(drift_finding_rows(report)),
+        hide_index=True,
+        use_container_width=True,
+    )
+    st.caption(
+        "Findings are assessment outcomes with investigation guidance, never automatic "
+        "lifecycle commands."
+    )
+
+
 def _display_mlflow(settings: AppSettings) -> None:
     st.header("MLflow")
     st.caption("This check is read-only and never creates an MLflow run.")
@@ -402,4 +496,5 @@ _display_generation_history(operations_snapshot)
 _display_validation(operations_snapshot)
 _display_cleanup_and_restoration(operations_snapshot)
 _display_quality()
+_display_drift()
 _display_mlflow(settings)

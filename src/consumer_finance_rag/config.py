@@ -139,6 +139,17 @@ class PublicShowcaseSettings(BaseModel):
     max_concurrent_requests: int = Field(default=2, ge=1, le=32)
 
 
+class DriftMonitoringSettings(BaseModel):
+    """Explicit Phase 4 assessment thresholds; no lifecycle action is attached."""
+
+    max_recall_drop: float = Field(default=0.0, ge=0.0, le=1.0)
+    max_mrr_drop: float = Field(default=0.0, ge=0.0, le=1.0)
+    max_answer_metric_drop: float = Field(default=0.0, ge=0.0)
+    minimum_operational_samples: int = Field(default=20, ge=2)
+    max_failure_rate_increase: float = Field(default=0.05, ge=0.0, le=1.0)
+    max_mean_latency_increase_ratio: float = Field(default=0.25, ge=0.0)
+
+
 class MLflowSettings(BaseModel):
     enabled: bool = True
     tracking_uri: str = "http://localhost:5000"
@@ -195,6 +206,7 @@ class AppSettings(BaseSettings):
     retrieval: RetrievalSettings = RetrievalSettings()
     context: ContextSettings = ContextSettings()
     public_showcase: PublicShowcaseSettings = PublicShowcaseSettings()
+    drift_monitoring: DriftMonitoringSettings = DriftMonitoringSettings()
     mlflow: MLflowSettings = MLflowSettings()
     evaluation: EvaluationSettings = EvaluationSettings()
     corpus_expansion: CorpusExpansionSettings = CorpusExpansionSettings()

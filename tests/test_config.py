@@ -172,3 +172,27 @@ def test_public_showcase_is_fail_closed_and_environment_configurable(
     assert overridden.inference_enabled is True
     assert overridden.max_requests_per_window == 7
     assert overridden.max_concurrent_requests == 1
+
+
+def test_drift_thresholds_are_typed_and_environment_configurable(
+    tmp_path: Path,
+    monkeypatch: MonkeyPatch,
+) -> None:
+    path = tmp_path / "config.yaml"
+    path.write_text(CONFIG, encoding="utf-8")
+
+    defaults = load_settings(path).drift_monitoring
+    assert defaults.max_recall_drop == 0.0
+    assert defaults.max_mrr_drop == 0.0
+    assert defaults.minimum_operational_samples == 20
+
+    monkeypatch.setenv("RAG__DRIFT_MONITORING__MAX_RECALL_DROP", "0.05")
+    monkeypatch.setenv("RAG__DRIFT_MONITORING__MINIMUM_OPERATIONAL_SAMPLES", "30")
+    monkeypatch.setenv(
+        "RAG__DRIFT_MONITORING__MAX_MEAN_LATENCY_INCREASE_RATIO", "0.4"
+    )
+
+    overridden = load_settings(path).drift_monitoring
+    assert overridden.max_recall_drop == 0.05
+    assert overridden.minimum_operational_samples == 30
+    assert overridden.max_mean_latency_increase_ratio == 0.4
