@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
-from pathlib import Path
 from types import SimpleNamespace
 
 from consumer_finance_rag.costs import (
@@ -174,11 +173,10 @@ def test_complete_judge_usage_can_be_priced_without_metric_count_inference() -> 
     assert usage.provider_call_count == 2
 
 
-def test_historical_paid_smoke_without_usage_remains_cost_unavailable() -> None:
-    report = ManagedRAGEvaluationReport.model_validate_json(
-        Path("reports/evaluation/paid-smoke.json").read_text(encoding="utf-8")
-    )
-
+def test_historical_paid_smoke_without_usage_remains_cost_unavailable(
+    historical_report_without_usage: ManagedRAGEvaluationReport,
+) -> None:
+    report = historical_report_without_usage
     assert report.format_version == "managed-rag-evaluation-report-v1"
     assert report.models.judge_model == "bedrock:/meta.llama3-70b-instruct-v1:0"
     assert report.answer_quality.ragas.aggregate_metrics

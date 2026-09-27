@@ -138,10 +138,10 @@ def test_very_small_cost_and_reasoning_subset_serialize_without_double_counting(
     ]
 
 
-def test_historical_report_without_usage_is_arrow_safe_and_cost_unavailable() -> None:
-    report = ManagedRAGEvaluationReport.model_validate_json(
-        Path("reports/evaluation/paid-smoke.json").read_text(encoding="utf-8")
-    )
+def test_historical_report_without_usage_is_arrow_safe_and_cost_unavailable(
+    historical_report_without_usage: ManagedRAGEvaluationReport,
+) -> None:
+    report = historical_report_without_usage
     assert report.answer_quality.ragas.usage is None
     estimate = estimate_model_usage_cost(
         report.answer_quality.ragas.usage,

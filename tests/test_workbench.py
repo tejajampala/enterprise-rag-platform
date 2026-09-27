@@ -1,7 +1,6 @@
 from __future__ import annotations
 
-import json
-from datetime import date
+from datetime import UTC, date, datetime
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -9,7 +8,18 @@ from typing import Any
 from consumer_finance_rag.config import MLflowSettings
 from consumer_finance_rag.costs import estimate_generation_cost, load_pricing_catalog
 from consumer_finance_rag.mlflow_inspection import TraceVisibility, inspect_exact_trace
-from consumer_finance_rag.models import Chunk, RetrievalMetadata, RetrievedChunk
+from consumer_finance_rag.models import (
+    Chunk,
+    ModelMetadata,
+    RAGResponse,
+    RetrievalMetadata,
+    RetrievedChunk,
+)
+from consumer_finance_rag.observability import (
+    RetrievalACLMode,
+    RetrievalMetrics,
+    RetrievalStatus,
+)
 from consumer_finance_rag.presentation import cited_only
 from consumer_finance_rag.public_showcase import PublicCitation
 from consumer_finance_rag.request_inspection import (
@@ -269,17 +279,145 @@ def test_navigation_and_public_private_isolation() -> None:
 
 
 def test_real_observation_fixture_has_no_answer_or_private_span_content() -> None:
-    payload = json.loads(
-        Path("data/fixtures/live_request_observation.json").read_text(encoding="utf-8")
+    request_id = "synthetic-request"
+    trace_id = "synthetic-trace"
+    candidate = _candidate(
+        "synthetic-chunk",
+        score=0.03,
+        dense_score=0.81,
+        sparse_score=4.2,
+        rrf_score=0.03,
+        reranker_score=0.94,
+    )
+    retrieval_trace = RetrievalTrace(
+        dense=[candidate],
+        sparse=[candidate],
+        fused=[candidate],
+        reranked=[candidate],
+        metadata=RetrievalMetadata(
+            dense_candidates=1,
+            sparse_candidates=1,
+            fused_candidates=1,
+            reranked=1,
+            final_contexts=1,
+        ),
+    )
+    store = RequestInspectionStore()
+    store.begin(
+        request_id=request_id,
+        generation=4,
+        model_id="google.gemma-3-4b-it",
+        region="us-east-1",
+    )
+    store.emit(
+        RetrievalMetrics(
+            request_id=request_id,
+            profile="local",
+            index_state_id=None,
+            generation=None,
+            qdrant_collection=None,
+            query_timestamp=datetime(2026, 1, 1, tzinfo=UTC),
+            total_retrieval_latency_ms=31_000.0,
+            query_embedding_latency_ms=1_050.0,
+            dense_search_latency_ms=2_100.0,
+            sparse_search_latency_ms=2_060.0,
+            fusion_latency_ms=520.0,
+            reranker_latency_ms=25_840.0,
+            pii_processing_latency_ms=10.0,
+            dense_candidate_count=6,
+            sparse_candidate_count=6,
+            fused_candidate_count=6,
+            final_context_count=1,
+            acl_mode=RetrievalACLMode.FILTER_AND_VALIDATE,
+            acl_filter_applied=True,
+            request_group_count=0,
+            rejected_candidate_count=0,
+            pii_policy="REDACT",
+            redacted_context_count=0,
+            detected_pii_type_counts=(),
+            redacted_pii_type_counts=(),
+            reranker_enabled=True,
+            status=RetrievalStatus.SUCCESS,
+        )
+    )
+    store.emit_inspection(request_id, retrieval_trace)
+    record = store.complete(
+        RAGResponse(
+            request_id=request_id,
+            trace_id=trace_id,
+            question="synthetic question that must not be retained",
+            answer="synthetic answer that must not be retained",
+            citations=[],
+            retrieved_chunks=[candidate],
+            retrieval_metadata=retrieval_trace.metadata,
+            model_metadata=ModelMetadata(
+                embedding_model="synthetic-embedding-model",
+                reranker_model="synthetic-reranker-model",
+                generation_model="google.gemma-3-4b-it",
+            ),
+            generation_metadata={
+                "usage": {
+                    "inputTokens": 928,
+                    "outputTokens": 75,
+                    "totalTokens": 1003,
+                }
+            },
+            stage_timings_ms={"total": 31_720.0, "reranker": 25_840.0},
+        )
     )
 
-    assert payload["generation"] == 4
-    assert payload["reranker_seconds"] == 25.84
-    assert payload["model_id"] == "google.gemma-3-4b-it"
-    assert payload["input_tokens"] == 928
-    assert payload["recorded_span_count"] == 8
-    assert "answer" not in payload
-    assert "spans" not in payload
+    spans = []
+    for index in range(8):
+        attributes: dict[str, object] = {
+            "private.payload": "synthetic private span content"
+        }
+        if index == 7:
+            attributes["mlflow.chat.tokenUsage"] = {
+                "input_tokens": 928,
+                "output_tokens": 75,
+                "total_tokens": 1003,
+            }
+        spans.append(
+            SimpleNamespace(
+                span_id=f"synthetic-span-{index}",
+                parent_id=None if index == 0 else "synthetic-span-0",
+                name=f"safe_stage_{index}",
+                start_time_ns=index * 1_000_000,
+                end_time_ns=(index + 1) * 1_000_000,
+                status=SimpleNamespace(status_code=SimpleNamespace(value="OK")),
+                attributes=attributes,
+            )
+        )
+    trace_inspection = inspect_exact_trace(
+        MLflowSettings(),
+        trace_id=trace_id,
+        expected_request_id=request_id,
+        client=_TraceClient(
+            SimpleNamespace(
+                info=SimpleNamespace(
+                    client_request_id=request_id,
+                    state="OK",
+                    execution_duration=31_720,
+                    trace_metadata={},
+                ),
+                data=SimpleNamespace(spans=spans),
+            )
+        ),
+    )
+    serialized = record.model_dump_json() + trace_inspection.model_dump_json()
+
+    assert record.generation == 4
+    assert record.stage_timings_ms["reranker"] == 25_840.0
+    assert record.model_id == "google.gemma-3-4b-it"
+    assert record.token_usage is not None
+    assert record.token_usage["input_tokens"] == 928
+    assert len(trace_inspection.spans) == 8
+    assert '"question":' not in serialized
+    assert '"answer":' not in serialized
+    assert "synthetic question that must not be retained" not in serialized
+    assert "synthetic answer that must not be retained" not in serialized
+    assert "private text must not be copied into inspection" not in serialized
+    assert "synthetic private span content" not in serialized
 
 
 def test_bottleneck_uses_leaf_stages_not_overlapping_total() -> None:

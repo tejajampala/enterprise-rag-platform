@@ -220,10 +220,15 @@ __marimo__/
 # Streamlit
 .streamlit/secrets.toml
 
+# Local MLflow development state (production uses PostgreSQL)
+mlflow.db
+
 # Generated Phase 1 lexical index state
 data/index/
 
 # Generated Phase 2 corpora and evaluation reports
 data/evaluation_corpus/
 reports/evaluation/
+# Explicitly content-bearing private judge-call debug artifacts.
+reports/evaluation/private_judge_calls/
 .ragas/
