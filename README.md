@@ -162,15 +162,17 @@ testing, shutdown, and private operator access.
 ### Private operator tools
 
 ```powershell
-uv run streamlit run app/operations_dashboard.py --server.address 127.0.0.1 --server.port 8502
+uv run streamlit run app/private_workbench.py --server.address 127.0.0.1 --server.port 8502
+uv run streamlit run app/operations_dashboard.py --server.address 127.0.0.1 --server.port 8503
 uv run python scripts/manage_index_generations.py --status
 uv run python scripts/manage_index_generations.py --validate
 uv run python scripts/manage_index_generations.py --cleanup-plan
 uv run python scripts/manage_index_generations.py --restore-generation 3
 ```
 
-The operations dashboard and MLflow UI must remain local. Never route ports `8502`, `5000`, `6333`,
-`6334`, or `5433` through the public tunnel.
+The private workbench, operations dashboard, and MLflow UI must remain local. Never route ports
+`8502`, `8503`, `5000`, `6333`, `6334`, or `5433` through the public tunnel. The workbench requires
+the managed profile but does not require `RAG__PUBLIC_SHOWCASE__ENABLED=true`.
 
 ## Evaluation
 
@@ -241,6 +243,11 @@ telemetry windows remain explicit `UNAVAILABLE`, `NOT_REQUESTED`, `FAILED`, `INC
 Only `managed` is accepted by the public showcase. Anonymous callers cannot submit a principal,
 groups, or an `ALLOW` PII policy.
 
+The [private workbench runbook](docs/private-workbench.md) covers request inspection, score
+provenance, approved private evaluation, cost separation, and trace-sync troubleshooting. The
+[repository cleanup audit](docs/repository-cleanup-audit.md) records why compatibility paths,
+migrations, datasets, and historical documents remain.
+
 ## Documentation
 
 - [Project learning guide](docs/project-learning-guide.md) — implementation walkthrough and
@@ -251,6 +258,10 @@ groups, or an `ALLOW` PII policy.
 - [System design walkthrough](docs/system-design-walkthrough.md) — engineering trade-offs and five
   change scenarios.
 - [Detailed architecture](docs/architecture.md) — schemas, invariants, telemetry, and operations.
+- [Private workbench](docs/private-workbench.md) — page guide, exact trace inspection, evaluation
+  switches and safeguards, cost handling, and a verified request walkthrough.
+- [Repository cleanup audit](docs/repository-cleanup-audit.md) — tracked-file/dependency findings
+  and safe cleanup classifications.
 - [Phase 2 interview notes](docs/phase2-interview-notes.md) and
   [validation record](docs/phase2-validation.md).
 

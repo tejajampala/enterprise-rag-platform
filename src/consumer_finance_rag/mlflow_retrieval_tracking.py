@@ -204,6 +204,7 @@ def _operational_metrics(metrics: RetrievalMetrics) -> dict[str, float]:
         "retrieval.failure": float(metrics.status.value == "ERROR"),
     }
     optional_latencies = {
+        "retrieval.query_embedding_latency_ms": metrics.query_embedding_latency_ms,
         "retrieval.dense_latency_ms": metrics.dense_search_latency_ms,
         "retrieval.sparse_latency_ms": metrics.sparse_search_latency_ms,
         "retrieval.fusion_latency_ms": metrics.fusion_latency_ms,

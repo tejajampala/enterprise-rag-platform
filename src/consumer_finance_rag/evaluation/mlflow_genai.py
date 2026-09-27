@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import math
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
-from typing import Any
+from dataclasses import dataclass, field
+from enum import StrEnum
+from numbers import Real
+from typing import Any, Final
 
 from consumer_finance_rag.config import MLflowSettings
 from consumer_finance_rag.evaluation.models import (
@@ -28,6 +31,28 @@ class MLflowJudgeResults:
     aggregate: dict[str, float]
     by_case: dict[str, dict[str, JudgeMetricValue]]
     run_id: str
+    metric_diagnostics: dict[str, MLflowMetricDiagnostic] = field(default_factory=dict)
+
+
+class MLflowMetricStatus(StrEnum):
+    COMPLETED = "COMPLETED"
+    FAILED = "FAILED"
+    MISSING = "MISSING"
+    INVALID = "INVALID"
+
+
+@dataclass(frozen=True)
+class MLflowMetricDiagnostic:
+    status: MLflowMetricStatus
+    error_category: str | None = None
+
+
+REGISTERED_SCORER_NAMES: Final[tuple[str, ...]] = (
+    "correctness",
+    "relevance_to_query",
+    "safety",
+    "retrieval_groundedness",
+)
 
 
 def require_judge_model(settings: MLflowSettings) -> str:
@@ -105,7 +130,6 @@ def _judge_rows(
             "inputs": {"question": result.question},
             "outputs": {"answer": result.answer},
             "expectations": {
-                "expected_facts": case.expected_facts,
                 "expected_response": case.reference_answer,
             },
             "tags": {"case_id": result.case_id},
@@ -116,7 +140,22 @@ def _judge_rows(
     return rows
 
 
-def _parse_case_scores(frame: Any) -> dict[str, dict[str, JudgeMetricValue]]:
+def _field_judge_rows(
+    cases: Sequence[EvaluationCase], results: Sequence[RAGCaseResult]
+) -> list[dict[str, Any]]:
+    """Approved field inputs for MLflow scorers, deliberately excluding traces."""
+
+    rows = _judge_rows(cases, results)
+    for row in rows:
+        row.pop("trace", None)
+    return rows
+
+
+def _parse_case_scores(
+    frame: Any,
+    scorer_names: Sequence[str] = REGISTERED_SCORER_NAMES,
+) -> dict[str, dict[str, JudgeMetricValue]]:
+    registered = _validated_scorer_names(scorer_names)
     parsed: dict[str, dict[str, JudgeMetricValue]] = {}
     if frame is None:
         return parsed
@@ -126,11 +165,13 @@ def _parse_case_scores(frame: Any) -> dict[str, dict[str, JudgeMetricValue]]:
         if not isinstance(case_id, str):
             case_id = str(row.get("request_id", ""))
         scores: dict[str, JudgeMetricValue] = {}
-        for column in frame.columns:
-            if not isinstance(column, str) or not column.endswith("/value"):
+        for name in registered:
+            column = f"{name}/value"
+            if column not in frame.columns:
                 continue
-            name = column.removesuffix("/value")
             value = row.get(column)
+            if _invalid_score(value) or _row_metric_error(row, name):
+                continue
             reason = row.get(f"{name}/rationale")
             scores[name] = JudgeMetricValue(
                 value=None if value is None else value,
@@ -138,6 +179,121 @@ def _parse_case_scores(frame: Any) -> dict[str, dict[str, JudgeMetricValue]]:
             )
         parsed[case_id] = scores
     return parsed
+
+
+def _metric_diagnostics(
+    frame: Any,
+    requested_metrics: Sequence[str],
+) -> dict[str, MLflowMetricDiagnostic]:
+    requested_metrics = _validated_scorer_names(requested_metrics)
+    diagnostics: dict[str, MLflowMetricDiagnostic] = {}
+    if frame is None:
+        return {
+            name: MLflowMetricDiagnostic(
+                MLflowMetricStatus.MISSING, "MISSING_RESULT"
+            )
+            for name in requested_metrics
+        }
+    if getattr(frame, "empty", False):
+        return {
+            name: MLflowMetricDiagnostic(
+                MLflowMetricStatus.MISSING, "MISSING_RESULT"
+            )
+            for name in requested_metrics
+        }
+    for name in requested_metrics:
+        value_column = f"{name}/value"
+        if value_column not in frame.columns:
+            diagnostics[name] = MLflowMetricDiagnostic(
+                MLflowMetricStatus.MISSING, "MISSING_RESULT"
+            )
+            continue
+        statuses: list[MLflowMetricDiagnostic] = []
+        for _, row in frame.iterrows():
+            error = _row_metric_error(row, name)
+            if error is not None:
+                statuses.append(
+                    MLflowMetricDiagnostic(
+                        MLflowMetricStatus.FAILED,
+                        _safe_error_category(error),
+                    )
+                )
+            elif _invalid_score(row.get(value_column)):
+                statuses.append(
+                    MLflowMetricDiagnostic(
+                        MLflowMetricStatus.INVALID, "INVALID_RESULT"
+                    )
+                )
+            else:
+                statuses.append(MLflowMetricDiagnostic(MLflowMetricStatus.COMPLETED))
+        failures = [item for item in statuses if item.status is not MLflowMetricStatus.COMPLETED]
+        diagnostics[name] = failures[0] if failures else MLflowMetricDiagnostic(
+            MLflowMetricStatus.COMPLETED
+        )
+    return diagnostics
+
+
+def _row_metric_error(row: Any, name: str) -> str | None:
+    for suffix in ("error_message", "error", "error_code"):
+        value = row.get(f"{name}/{suffix}")
+        if isinstance(value, str) and value.strip():
+            return value
+    return None
+
+
+def _invalid_score(value: object) -> bool:
+    if value is None:
+        return True
+    if isinstance(value, bool):
+        return False
+    if isinstance(value, Real):
+        return not math.isfinite(float(value))
+    if isinstance(value, str):
+        return not value.strip()
+    return True
+
+
+def _validated_scorer_names(scorer_names: Sequence[str]) -> tuple[str, ...]:
+    requested = tuple(dict.fromkeys(scorer_names))
+    unknown = set(requested).difference(REGISTERED_SCORER_NAMES)
+    if unknown:
+        raise ValueError("Only explicitly registered MLflow scorer names may be parsed")
+    return requested
+
+
+def _parse_aggregate_scores(
+    metrics: Mapping[str, object],
+    scorer_names: Sequence[str],
+) -> dict[str, float]:
+    parsed: dict[str, float] = {}
+    for name in _validated_scorer_names(scorer_names):
+        for candidate in (name, f"{name}/mean"):
+            value = metrics.get(candidate)
+            if (
+                isinstance(value, Real)
+                and not isinstance(value, bool)
+                and math.isfinite(float(value))
+            ):
+                parsed[name] = float(value)
+                break
+    return parsed
+
+
+def _safe_error_category(error: str) -> str:
+    normalized = error.casefold()
+    if "amazonbedrockprovider" in normalized and "get_endpoint_url" in normalized:
+        return "PROVIDER_UNSUPPORTED"
+    if "expected_response" in normalized and "expected_facts" in normalized:
+        return "INVALID_EXPECTATIONS"
+    if "awsidandkey" in normalized or "access key" in normalized or "credential" in normalized:
+        return "AUTHENTICATION_CONFIGURATION"
+    if "retriever" in normalized or "page_content" in normalized or "document text" in normalized:
+        return "RETRIEVER_SCHEMA"
+    if "timeout" in normalized:
+        return "TIMEOUT"
+    if "permission" in normalized or "accessdenied" in normalized:
+        return "ACCESS_DENIED"
+    return "SCORER_ERROR"
 
 
 def run_mlflow_judges(
@@ -154,31 +310,32 @@ def run_mlflow_judges(
         from mlflow.genai.scorers import (
             Correctness,
             RelevanceToQuery,
-            RetrievalGroundedness,
             Safety,
         )
 
         mlflow.set_tracking_uri(settings.tracking_uri)
         mlflow.set_experiment(settings.evaluation_experiment_name)
-        rows = _judge_rows(cases, results)
-        for row in rows:
-            trace_id = row.pop("trace", None)
-            if isinstance(trace_id, str):
-                trace = mlflow.get_trace(trace_id, flush=True)
-                if trace is not None:
-                    row["trace"] = trace
+        rows = _field_judge_rows(cases, results)
         scorers: list[Any] = [
             Correctness(model=judge_model),
             RelevanceToQuery(model=judge_model),
             Safety(model=judge_model),  # type: ignore[no-untyped-call]
         ]
-        if rows and all("trace" in row for row in rows):
-            scorers.append(RetrievalGroundedness(model=judge_model))
+        requested_metrics = [
+            "correctness",
+            "relevance_to_query",
+            "safety",
+        ]
         evaluated = mlflow.genai.evaluate(data=pd.DataFrame(rows), scorers=scorers)
         return MLflowJudgeResults(
-            aggregate=dict(evaluated.metrics),
-            by_case=_parse_case_scores(evaluated.result_df),
+            aggregate=_parse_aggregate_scores(
+                evaluated.metrics, requested_metrics
+            ),
+            by_case=_parse_case_scores(evaluated.result_df, requested_metrics),
             run_id=evaluated.run_id,
+            metric_diagnostics=_metric_diagnostics(
+                evaluated.result_df, requested_metrics
+            ),
         )
     except JudgeConfigurationError:
         raise

@@ -192,6 +192,8 @@ class QdrantHybridStore:
                     score=float(point.score),
                     dense_rank=rank if rank_kind == "dense" else None,
                     sparse_rank=rank if rank_kind == "sparse" else None,
+                    dense_score=float(point.score) if rank_kind == "dense" else None,
+                    sparse_score=float(point.score) if rank_kind == "sparse" else None,
                 )
             )
         return retrieved

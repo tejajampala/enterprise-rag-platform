@@ -120,6 +120,7 @@ class RAGCaseResult(BaseModel):
     contexts: list[str]
     chunk_ids: list[str]
     token_usage: dict[str, int] | None = None
+    request_id: str | None = None
     trace_id: str | None = None
     mlflow_judges: dict[str, JudgeMetricValue] = Field(default_factory=dict)
     ragas: dict[str, JudgeMetricValue] = Field(default_factory=dict)

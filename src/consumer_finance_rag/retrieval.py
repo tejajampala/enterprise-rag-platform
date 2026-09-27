@@ -80,6 +80,8 @@ def reciprocal_rank_fusion(
     scores: dict[str, float] = {}
     dense_ranks: dict[str, int] = {}
     sparse_ranks: dict[str, int] = {}
+    dense_scores: dict[str, float] = {}
+    sparse_scores: dict[str, float] = {}
     for list_index, ranked in enumerate(ranked_lists):
         for rank, candidate in enumerate(ranked, start=1):
             chunk_id = candidate.chunk.chunk_id
@@ -87,8 +89,20 @@ def reciprocal_rank_fusion(
             scores[chunk_id] = scores.get(chunk_id, 0.0) + 1.0 / (rrf_k + rank)
             if candidate.dense_rank is not None or list_index == 0:
                 dense_ranks.setdefault(chunk_id, candidate.dense_rank or rank)
+                dense_scores.setdefault(
+                    chunk_id,
+                    candidate.dense_score
+                    if candidate.dense_score is not None
+                    else candidate.score,
+                )
             if candidate.sparse_rank is not None or list_index == 1:
                 sparse_ranks.setdefault(chunk_id, candidate.sparse_rank or rank)
+                sparse_scores.setdefault(
+                    chunk_id,
+                    candidate.sparse_score
+                    if candidate.sparse_score is not None
+                    else candidate.score,
+                )
 
     fused = [
         RetrievedChunk(
@@ -96,6 +110,9 @@ def reciprocal_rank_fusion(
             score=scores[chunk_id],
             dense_rank=dense_ranks.get(chunk_id),
             sparse_rank=sparse_ranks.get(chunk_id),
+            dense_score=dense_scores.get(chunk_id),
+            sparse_score=sparse_scores.get(chunk_id),
+            rrf_score=scores[chunk_id],
         )
         for chunk_id, candidate in by_id.items()
     ]
@@ -119,6 +136,17 @@ class RetrievalTrace:
     metadata: RetrievalMetadata
 
 
+class RetrievalInspectionSink(Protocol):
+    """Private, request-keyed consumer for metadata-only ranking inspection."""
+
+    def emit_inspection(self, request_id: str, trace: RetrievalTrace) -> None: ...
+
+
+class NoOpRetrievalInspectionSink:
+    def emit_inspection(self, request_id: str, trace: RetrievalTrace) -> None:
+        del request_id, trace
+
+
 class HybridRetrievalService:
     """The single public retrieval entry point for the RAG pipeline."""
 
@@ -137,6 +165,7 @@ class HybridRetrievalService:
         pii_detector: DeterministicPIIDetector | None = None,
         telemetry_context: RetrievalTelemetryContext | None = None,
         telemetry_sink: RetrievalTelemetrySink | None = None,
+        inspection_sink: RetrievalInspectionSink | None = None,
     ) -> None:
         self.embedding_provider = embedding_provider
         self.reranker = reranker
@@ -153,6 +182,7 @@ class HybridRetrievalService:
             qdrant_collection=collection_name,
         )
         self.telemetry_sink = telemetry_sink or NoOpRetrievalTelemetrySink()
+        self.inspection_sink = inspection_sink or NoOpRetrievalInspectionSink()
 
     def retrieve(
         self,
@@ -198,6 +228,7 @@ class HybridRetrievalService:
             else RetrievalACLMode.DISABLED
         )
         dense_latency: float | None = None
+        embedding_latency: float | None = None
         sparse_latency: float | None = None
         fusion_latency: float | None = None
         reranker_latency: float | None = None
@@ -226,6 +257,7 @@ class HybridRetrievalService:
                 qdrant_collection=self.telemetry_context.qdrant_collection,
                 query_timestamp=query_timestamp,
                 total_retrieval_latency_ms=_elapsed_ms(started),
+                query_embedding_latency_ms=embedding_latency,
                 dense_search_latency_ms=dense_latency,
                 sparse_search_latency_ms=sparse_latency,
                 fusion_latency_ms=fusion_latency,
@@ -266,12 +298,16 @@ class HybridRetrievalService:
                 attributes={"embedding.model": self.embedding_provider.model_name},
             ) as span:
                 span.set_inputs({"query_characters": len(query)})
-                query_vector = self.embedding_provider.embed_query(query)
+                stage_started = perf_counter()
+                try:
+                    query_vector = self.embedding_provider.embed_query(query)
+                finally:
+                    embedding_latency = _elapsed_ms(stage_started)
                 span.set_outputs({"dimensions": len(query_vector)})
 
             with self.tracer.span(
                 "dense_hnsw_search",
-                span_type="RETRIEVER",
+                span_type="CHAIN",
                 attributes={
                     "retrieval.mode": "dense_hnsw_ann",
                     "qdrant.collection": self.collection_name,
@@ -296,7 +332,7 @@ class HybridRetrievalService:
             failure_stage = RetrievalFailureStage.SPARSE
             with self.tracer.span(
                 "sparse_bm25_search",
-                span_type="RETRIEVER",
+                span_type="CHAIN",
                 attributes={
                     "retrieval.mode": "sparse_bm25",
                     "qdrant.collection": self.collection_name,
@@ -404,6 +440,7 @@ class HybridRetrievalService:
                     final_contexts=len(final),
                 ),
             )
+            self._emit_inspection(resolved_request_id, result)
         except Exception as exc:
             if isinstance(exc, AuthorizationInvariantError):
                 failure_stage = RetrievalFailureStage.ACL
@@ -497,6 +534,14 @@ class HybridRetrievalService:
 
         try:
             self.telemetry_sink.emit(metrics)
+        except Exception:
+            return
+
+    def _emit_inspection(self, request_id: str, trace: RetrievalTrace) -> None:
+        """Keep optional private inspection failures from changing retrieval."""
+
+        try:
+            self.inspection_sink.emit_inspection(request_id, trace)
         except Exception:
             return
 

@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 from collections.abc import Iterator, Sequence
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any
+from threading import Event
+from typing import Any, cast
 from uuid import UUID
 
 import pytest
@@ -31,7 +33,20 @@ from consumer_finance_rag.public_showcase import (
     RequestTelemetryCollector,
     validate_public_showcase_runtime,
 )
+from consumer_finance_rag.quality_policy import (
+    DeliveryOutcome,
+    QualityCheckResult,
+    QualityDecision,
+    QualityProfile,
+    QualityStatus,
+)
+from consumer_finance_rag.request_inspection import (
+    RequestInspectionStore,
+    WorkbenchRAGService,
+    WorkbenchRequestError,
+)
 from consumer_finance_rag.retrieval import HybridRetrievalService
+from consumer_finance_rag.runtime_groundedness import RuntimeQualityGate
 from consumer_finance_rag.sparse import BM25SparseEncoder
 
 
@@ -55,7 +70,16 @@ class FakeReranker:
         top_k: int,
     ) -> list[RetrievedChunk]:
         del query
-        return list(candidates[:top_k])
+        return [
+            item.model_copy(
+                update={
+                    "rerank_score": float(
+                        item.chunk.metadata.get("test_rerank_score", 1.0)
+                    )
+                }
+            )
+            for item in candidates[:top_k]
+        ]
 
 
 class PublicStore:
@@ -117,8 +141,9 @@ class RequestBoundTracer:
         *,
         span_type: str,
         attributes: dict[str, Any] | None = None,
+        parent_span: TraceSpan | None = None,
     ) -> Iterator[TraceSpan]:
-        del span_type
+        del span_type, parent_span
         if name == "rag_request":
             self.root_attributes = attributes
         yield RecordingSpan()
@@ -137,9 +162,7 @@ class SafeLLM:
         return LLMResult(
             text="Call +61 2 9374 4000 for an answer [C1].",
             model_id=self.model_name,
-            response_metadata={
-                "usage": {"inputTokens": 12, "outputTokens": 8, "totalTokens": 20}
-            },
+            response_metadata={"usage": {"inputTokens": 12, "outputTokens": 8, "totalTokens": 20}},
         )
 
 
@@ -147,6 +170,83 @@ class FailingLLM(SafeLLM):
     def generate(self, system_prompt: str, user_prompt: str) -> LLMResult:
         del system_prompt, user_prompt
         raise RuntimeError("credential=secret-value alice@example.com")
+
+
+class RejectingQualityGate:
+    def evaluate_pre_generation(self, *args: object, **kwargs: object) -> QualityDecision:
+        del args, kwargs
+        return _passing_pre_generation_decision()
+
+    def evaluate(self, *args: object, **kwargs: object) -> QualityDecision:
+        del args, kwargs
+        check = QualityCheckResult(
+            check="reference_free_groundedness",
+            status=QualityStatus.FAIL,
+            reason="Rejected internally.",
+            reason_category="MATERIAL_UNSUPPORTED_CLAIM",
+            score=0.2,
+            threshold=0.8,
+        )
+        return QualityDecision(
+            request_id="replaced-by-service-boundary",
+            profile=QualityProfile.STRICT,
+            policy_version="strict-test-v1",
+            status=QualityStatus.FAIL,
+            deliver_answer=False,
+            delivery_outcome=DeliveryOutcome.BLOCKED,
+            checks=(check,),
+            reason=check.reason,
+        )
+
+
+class BlockingQualityGate:
+    def __init__(self) -> None:
+        self.entered = Event()
+        self.release = Event()
+
+    def evaluate(self, *args: object, **kwargs: object) -> QualityDecision:
+        del args, kwargs
+        self.entered.set()
+        assert self.release.wait(timeout=2)
+        check = QualityCheckResult(
+            check="deterministic_runtime_policy",
+            status=QualityStatus.PASS,
+            reason="Approved after the blocking gate completed.",
+        )
+        return QualityDecision(
+            request_id="replaced-by-service-boundary",
+            profile=QualityProfile.STANDARD,
+            policy_version="standard-test-v1",
+            status=QualityStatus.PASS,
+            deliver_answer=True,
+            delivery_outcome=DeliveryOutcome.ANSWERED,
+            checks=(check,),
+            reason=check.reason,
+        )
+
+    def evaluate_pre_generation(self, *args: object, **kwargs: object) -> QualityDecision:
+        del args, kwargs
+        return _passing_pre_generation_decision()
+
+
+def _passing_pre_generation_decision() -> QualityDecision:
+    check = QualityCheckResult(
+        check="evidence_relevance",
+        status=QualityStatus.PASS,
+        reason="Relevant test evidence.",
+        score=1.0,
+        threshold=0.0,
+    )
+    return QualityDecision(
+        request_id="request",
+        profile=QualityProfile.STANDARD,
+        policy_version="test-v1",
+        status=QualityStatus.PASS,
+        deliver_answer=True,
+        delivery_outcome=DeliveryOutcome.ANSWERED,
+        checks=(check,),
+        reason=check.reason,
+    )
 
 
 def _settings(
@@ -203,8 +303,9 @@ def _application(
     telemetry: RequestTelemetryCollector,
     *,
     llm: SafeLLM | None = None,
+    candidate: RetrievedChunk | None = None,
 ) -> tuple[ApplicationRuntime, PublicStore, SafeLLM, RequestBoundTracer]:
-    candidate = _candidate()
+    candidate = candidate or _candidate()
     store = PublicStore(candidate)
     tracer = RequestBoundTracer()
     embedding = FakeEmbedding()
@@ -264,12 +365,14 @@ def _service(
     settings: AppSettings,
     *,
     llm: SafeLLM | None = None,
+    candidate: RetrievedChunk | None = None,
 ) -> tuple[PublicRAGService, PublicStore, SafeLLM, RequestBoundTracer]:
     telemetry = RequestTelemetryCollector()
     application, store, generation, tracer = _application(
         settings,
         telemetry,
         llm=llm,
+        candidate=candidate,
     )
     return (
         PublicRAGService(
@@ -344,6 +447,92 @@ def test_public_error_hides_internal_exception_details() -> None:
     assert captured.value.code == "request_failed"
     assert "secret-value" not in captured.value.public_message
     assert "alice@example.com" not in captured.value.public_message
+
+
+def test_rejected_candidate_never_crosses_public_or_private_delivery_boundary() -> None:
+    settings = _settings()
+    telemetry = RequestTelemetryCollector()
+    application, _store, _llm, _tracer = _application(settings, telemetry)
+    rejecting = cast(RuntimeQualityGate, RejectingQualityGate())
+    public = PublicRAGService(
+        settings,
+        application,
+        telemetry,
+        PublicInferenceGate(settings.public_showcase),
+        quality_gate=rejecting,
+    )
+    with pytest.raises(PublicRequestError) as public_error:
+        public.answer("What should I do?")
+
+    assert public_error.value.code == "quality_gate_blocked"
+    assert "Call +61" not in public_error.value.public_message
+
+    records = RequestInspectionStore()
+    private = WorkbenchRAGService(
+        settings,
+        application,
+        records,
+        quality_gate=rejecting,
+    )
+    with pytest.raises(WorkbenchRequestError) as private_error:
+        private.answer("What should I do?")
+
+    record = records.get_exact(private_error.value.request_id)
+    assert record is not None
+    assert record.quality_decision is not None
+    assert record.quality_decision.deliver_answer is False
+    assert record.token_usage == {
+        "input_tokens": 12,
+        "output_tokens": 8,
+        "total_tokens": 20,
+    }
+
+
+def test_irrelevant_evidence_abstains_before_generation_or_judge() -> None:
+    candidate = _candidate()
+    irrelevant = candidate.model_copy(
+        update={
+            "chunk": candidate.chunk.model_copy(
+                update={
+                    "metadata": {
+                        **candidate.chunk.metadata,
+                        "test_rerank_score": -9.4375,
+                    }
+                }
+            )
+        }
+    )
+    service, _store, llm, _tracer = _service(_settings(), candidate=irrelevant)
+
+    with pytest.raises(PublicRequestError) as captured:
+        service.answer("Tell me about airplanes")
+
+    assert captured.value.code == "insufficient_relevant_evidence"
+    assert llm.prompts == []
+
+
+def test_public_answer_cannot_return_before_quality_approval() -> None:
+    settings = _settings()
+    telemetry = RequestTelemetryCollector()
+    application, _store, _llm, _tracer = _application(settings, telemetry)
+    blocking = BlockingQualityGate()
+    public = PublicRAGService(
+        settings,
+        application,
+        telemetry,
+        PublicInferenceGate(settings.public_showcase),
+        quality_gate=cast(RuntimeQualityGate, blocking),
+    )
+
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        result = executor.submit(public.answer, "What should I do?")
+        assert blocking.entered.wait(timeout=2)
+        assert not result.done()
+        blocking.release.set()
+        answer = result.result(timeout=2)
+
+    assert "[REDACTED:PHONE]" in answer.answer
+    assert answer.quality_decision.status is QualityStatus.PASS
 
 
 def test_question_length_and_kill_switch_fail_before_inference() -> None:

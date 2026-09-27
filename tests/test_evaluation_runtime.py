@@ -5,13 +5,18 @@ from types import SimpleNamespace
 import pytest
 
 from consumer_finance_rag.config import MLflowSettings
+from consumer_finance_rag.evaluation.judge_preflight import resolve_judge_identity
 from consumer_finance_rag.evaluation.mlflow_genai import (
     JudgeConfigurationError,
     require_judge_model,
 )
 from consumer_finance_rag.evaluation.ragas_adapter import (
     DisabledRagasEvaluator,
+    PrivacySafeLiteLLMUsageCallback,
+    _install_vertexai_import_compatibility,
     build_ragas_evaluator,
+    build_ragas_instructor_llm,
+    instrumented_litellm_async_client,
 )
 from consumer_finance_rag.evaluation.tracking import evaluation_run
 from consumer_finance_rag.observability import NoOpTracer, build_tracer
@@ -80,6 +85,61 @@ def test_explicit_bedrock_judge_is_preserved() -> None:
 
 
 def test_ragas_disabled_is_offline_noop() -> None:
-    evaluator = build_ragas_evaluator(enabled=False, judge_model=None, references={})
+    evaluator = build_ragas_evaluator(
+        enabled=False,
+        judge_model=None,
+        judge_region=None,
+        references={},
+    )
     assert isinstance(evaluator, DisabledRagasEvaluator)
     assert evaluator.evaluate([]) == {}
+
+
+def test_ragas_043_uses_actual_async_litellm_instructor_contract(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "true")
+    _install_vertexai_import_compatibility()
+    from litellm import completion
+    from ragas.llms import llm_factory
+
+    synchronous = llm_factory(
+        "bedrock/example",
+        provider="litellm",
+        client=completion,
+        adapter="instructor",
+    )
+    callback = PrivacySafeLiteLLMUsageCallback(
+        model_id="example",
+        region="us-east-1",
+    )
+    asynchronous = llm_factory(
+        "bedrock/example",
+        provider="litellm",
+        client=instrumented_litellm_async_client(callback),
+        adapter="instructor",
+        aws_region_name="us-east-1",
+    )
+
+    assert synchronous.client.__class__.__name__ == "Instructor"  # type: ignore[attr-defined]
+    assert asynchronous.client.__class__.__name__ == "AsyncInstructor"  # type: ignore[attr-defined]
+    assert asynchronous.model_args["aws_region_name"] == "us-east-1"  # type: ignore[attr-defined]
+
+
+def test_gpt_oss_ragas_uses_async_instructor_and_converse_structured_route(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "true")
+    identity = resolve_judge_identity(
+        "bedrock:/openai.gpt-oss-20b-1:0", "ap-southeast-2"
+    )
+    callback = PrivacySafeLiteLLMUsageCallback(
+        model_id=identity.bedrock_model_id,
+        region=identity.region,
+    )
+
+    llm = build_ragas_instructor_llm(identity, callback)
+
+    assert llm.client.__class__.__name__ == "AsyncInstructor"
+    assert llm.model == "bedrock/converse/openai.gpt-oss-20b-1:0"
+    assert llm.model_args["aws_region_name"] == "ap-southeast-2"

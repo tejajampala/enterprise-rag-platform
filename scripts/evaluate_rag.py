@@ -236,7 +236,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         ragas = build_ragas_evaluator(
             enabled=True,
             judge_model=settings.mlflow.judge_model,
+            judge_region=settings.mlflow.judge_region,
             references=references,
+            judge_max_tokens=settings.mlflow.ragas_judge_max_tokens,
+            context_precision_max_tokens=(
+                settings.mlflow.ragas_context_precision_max_tokens
+            ),
         )
         ragas_results = ragas.evaluate(generated)
         generated = [

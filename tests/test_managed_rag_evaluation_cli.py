@@ -12,6 +12,7 @@ from uuid import UUID
 import pytest
 
 from consumer_finance_rag.config import MLflowSettings
+from consumer_finance_rag.evaluation.judge_preflight import JudgePreflightStatus
 from consumer_finance_rag.observability import TraceContentPolicy
 
 SCRIPT_PATH = Path("scripts/evaluate_managed_rag.py")
@@ -44,6 +45,7 @@ def _settings(*, mlflow_enabled: bool = False) -> SimpleNamespace:
         evaluation=SimpleNamespace(managed_dataset_path=Path("managed.json")),
         managed_ingestion=SimpleNamespace(corpus_key="consumer-finance-managed"),
         models=SimpleNamespace(generation=SimpleNamespace(model="bedrock-generation")),
+        aws=SimpleNamespace(region="us-east-1"),
         mlflow=MLflowSettings(
             enabled=mlflow_enabled,
             judge_model="bedrock:/bedrock-judge",
@@ -107,6 +109,15 @@ def _patch_common(
         "write_managed_rag_report",
         lambda _report, path: Path(path),
     )
+    monkeypatch.setattr(
+        evaluate_managed_rag_cli,
+        "preflight_bedrock_judge",
+        lambda _settings: SimpleNamespace(
+            metadata_reason="available",
+            mlflow_genai=SimpleNamespace(status=JudgePreflightStatus.AVAILABLE),
+            ragas=SimpleNamespace(status=JudgePreflightStatus.AVAILABLE),
+        ),
+    )
     return settings, runtime
 
 
@@ -162,6 +173,26 @@ def test_judges_without_generation_fail_before_runtime_construction(
 
     with pytest.raises(SystemExit, match="require --generate"):
         evaluate_managed_rag_cli.main(["--current", "--with-mlflow-judges"])
+
+
+def test_private_judge_io_requires_explicit_ragas_before_runtime(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        evaluate_managed_rag_cli,
+        "load_settings",
+        lambda _path: _settings(mlflow_enabled=True),
+    )
+    monkeypatch.setattr(
+        evaluate_managed_rag_cli,
+        "_build_current_runtime",
+        lambda *_args: pytest.fail("invalid flags reached runtime construction"),
+    )
+
+    with pytest.raises(SystemExit, match="requires --with-ragas"):
+        evaluate_managed_rag_cli.main(
+            ["--current", "--generate", "--capture-judge-io"]
+        )
 
 
 def test_combined_mode_reuses_pinned_runtime_and_one_mlflow_judge_run(

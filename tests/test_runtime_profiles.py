@@ -386,11 +386,11 @@ def test_legacy_build_pipeline_does_not_dispatch_runtime_profile(
     assert pipeline.retrieval is service
 
 
-def test_streamlit_renders_factory_metadata_instead_of_fabricated_generation() -> None:
+def test_streamlit_uses_factory_runtime_without_rendering_internal_generation() -> None:
     source = Path("app/streamlit_app.py").read_text(encoding="utf-8")
 
-    assert "runtime.display_metadata()" in source
-    assert "settings.runtime.profile" in source
+    assert "runtime.display_metadata()" not in source
+    assert "Serving profile:" not in source
     assert "build_application_runtime" in source
     assert "get_pipeline" not in source
     assert "g000001" not in source

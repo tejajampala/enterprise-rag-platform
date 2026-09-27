@@ -29,7 +29,7 @@ from consumer_finance_rag.evaluation.models import (
 )
 from consumer_finance_rag.lineage.managed_retrieval import ManagedRetrievalRuntime
 from consumer_finance_rag.models import Chunk, RetrievedChunk
-from consumer_finance_rag.observability import RetrievalTelemetryContext
+from consumer_finance_rag.observability import NoOpTracer, RetrievalTelemetryContext
 from consumer_finance_rag.pipeline import RAGPipeline
 from consumer_finance_rag.providers import LLMResult
 from consumer_finance_rag.retrieval import HybridRetrievalService
@@ -338,6 +338,7 @@ def test_generated_answers_use_pipeline_acl_and_redacted_context(tmp_path: Path)
     serialized = path.read_text(encoding="utf-8")
 
     assert report.mode == "generated_answers"
+    assert report.format_version == "managed-rag-evaluation-report-v3"
     assert report.answer_quality.generation.status == "COMPLETED"
     assert report.answer_quality.generation.generated_case_count == 2
     assert report.answer_quality.generation.token_usage.total_tokens == 30
@@ -398,6 +399,7 @@ def test_explicit_judges_reuse_batch_adapters_and_keep_rationales_out_of_report(
         trace_id_provider=lambda: "trace-1",
         mlflow_judge_runner=mlflow_runner,
         ragas_builder=ragas_builder,
+        ragas_execution_tracer=NoOpTracer(),
         generated_at=NOW,
     )
     serialized = write_managed_rag_report(

@@ -48,6 +48,9 @@ class RetrievedChunk(BaseModel):
     score: float
     dense_rank: int | None = None
     sparse_rank: int | None = None
+    dense_score: float | None = None
+    sparse_score: float | None = None
+    rrf_score: float | None = None
     rerank_score: float | None = None
 
 
@@ -62,6 +65,23 @@ class Citation(BaseModel):
     chunk_id: str
 
 
+class ContextPassage(BaseModel):
+    """One selected passage in both original and prompt-formatted forms."""
+
+    model_config = ConfigDict(frozen=True)
+
+    order: int = Field(ge=1)
+    citation_id: str
+    document_title: str
+    source_url: str | None
+    source_id: str | None = None
+    document_id: str
+    chunk_id: str
+    original_text: str
+    prompt_section_text: str
+    truncated: bool
+
+
 class StructuredContext(BaseModel):
     """Prompt-ready evidence and its citation catalogue."""
 
@@ -70,6 +90,7 @@ class StructuredContext(BaseModel):
     text: str
     citations: list[Citation]
     chunks: list[RetrievedChunk]
+    passages: list[ContextPassage] = Field(default_factory=list)
 
 
 class RetrievalMetadata(BaseModel):
@@ -104,8 +125,10 @@ class RAGResponse(BaseModel):
     trace_id: str | None = None
     question: str
     answer: str
+    structured_context: StructuredContext | None = None
     citations: list[Citation]
     retrieved_chunks: list[RetrievedChunk]
     retrieval_metadata: RetrievalMetadata
     model_metadata: ModelMetadata
     generation_metadata: dict[str, Any] = Field(default_factory=dict)
+    stage_timings_ms: dict[str, float] = Field(default_factory=dict)

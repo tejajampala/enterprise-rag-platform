@@ -50,7 +50,7 @@ select = ["E", "F", "I", "B", "UP", "SIM", "RUF"]
 python_version = "3.12"
 strict = true
 files = ["src", "scripts", "app", "tests"]
-exclude = ['\.venv']
+exclude = ['\.venv', 'reports[\\/]evaluation[\\/]private_judge_calls']
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
