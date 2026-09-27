@@ -12,14 +12,14 @@ models:
     trust_remote_code: true
   generation:
     provider: bedrock
-    vendor: anthropic
-    model: null
+    vendor: google
+    model: google.gemma-3-4b-it
     max_tokens: 800
     temperature: 0.1
     top_p: 0.9
 
 aws:
-  region: us-east-1
+  region: ap-southeast-2
   connect_timeout_seconds: 5
   read_timeout_seconds: 120
   retry_mode: standard
@@ -84,6 +84,77 @@ public_showcase:
   rate_window_seconds: 3600
   max_concurrent_requests: 2
 
+private_workbench:
+  automatic_evaluation_enabled: true
+  default_mlflow_judges: true
+  default_ragas: true
+  default_save_to_mlflow: true
+  max_evaluation_cases: 2
+  judge_call_debug_directory: reports/evaluation/private_judge_calls
+  judge_call_debug_retention_hours: 24
+  judge_profiles:
+    - name: GPT-OSS 20B (development default)
+      configuration_uri: bedrock:/openai.gpt-oss-20b-1:0
+      region: ap-southeast-2
+    - name: Llama 3 70B (historical baseline)
+      configuration_uri: bedrock:/meta.llama3-70b-instruct-v1:0
+      region: us-east-1
+
+# These policy versions and thresholds are configuration, not universal production
+# truth. Validate them against reviewed cases and human feedback before deployment.
+quality_policy:
+  default_profile: STANDARD
+  standard:
+    version: standard-v1
+    require_evidence: true
+    require_relevant_evidence: true
+    relevance_policy_version: cross-encoder-reviewed-fixture-candidate-v1
+    minimum_relevance_score: 0.0
+    require_valid_citations: true
+    reference_free_judge_enabled: false
+    judge_timeout_seconds: 8
+    judge_budget_usd: 0.01
+    judge_failure_behavior: REVIEW_REQUIRED
+    high_risk_financial_behavior: REVIEW_REQUIRED
+  strict:
+    version: strict-groundedness-candidate-v1
+    require_evidence: true
+    require_relevant_evidence: true
+    relevance_policy_version: cross-encoder-reviewed-fixture-candidate-v1
+    minimum_relevance_score: 0.0
+    require_valid_citations: true
+    reference_free_judge_enabled: true
+    judge_model_id: openai.gpt-oss-20b-1:0
+    judge_region: ap-southeast-2
+    groundedness_threshold: 0.80
+    judge_timeout_seconds: 8
+    judge_max_input_tokens: 8192
+    judge_max_output_tokens: 1024
+    judge_max_retries: 0
+    judge_budget_usd: 0.01
+    judge_failure_behavior: REVIEW_REQUIRED
+    judge_timeout_behavior: ABSTAIN
+    high_risk_financial_behavior: REVIEW_REQUIRED
+  evaluation:
+    version: evaluation-v1
+    require_evidence: true
+    require_relevant_evidence: true
+    relevance_policy_version: cross-encoder-reviewed-fixture-candidate-v1
+    minimum_relevance_score: 0.0
+    require_valid_citations: true
+    reference_free_judge_enabled: true
+    judge_timeout_seconds: 30
+    judge_budget_usd: 0.10
+    judge_failure_behavior: REVIEW_REQUIRED
+    high_risk_financial_behavior: REVIEW_REQUIRED
+
+online_monitoring:
+  enabled: false
+  approved_data_handling: false
+  sample_rate: 0.0
+  max_concurrency: 1
+  daily_budget_usd: 0.0
+
 drift_monitoring:
   max_recall_drop: 0.0
   max_mrr_drop: 0.0
@@ -98,7 +169,10 @@ mlflow:
   experiment_name: consumer-finance-rag
   evaluation_experiment_name: consumer-finance-rag-evaluation
   evaluation_dataset_name: consumer-finance-seed-evaluation-v1
-  judge_model: null
+  judge_model: bedrock:/openai.gpt-oss-20b-1:0
+  judge_region: ap-southeast-2
+  ragas_judge_max_tokens: 1024
+  ragas_context_precision_max_tokens: 2048
   report_directory: reports/evaluation
 
 evaluation:

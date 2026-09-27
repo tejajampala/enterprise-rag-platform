@@ -1,0 +1,38 @@
+version: bedrock-pricing-v3
+rules:
+  - provider: aws-bedrock
+    model_id: google.gemma-3-4b-it
+    region: us-east-1
+    pricing_mode: on-demand-standard
+    input_usd_per_million_tokens: "0.04"
+    output_usd_per_million_tokens: "0.08"
+    currency: USD
+    effective_date: 2026-09-25
+    source: https://aws.amazon.com/bedrock/pricing/
+  - provider: aws-bedrock
+    model_id: google.gemma-3-4b-it
+    region: ap-southeast-2
+    pricing_mode: on-demand-standard
+    input_usd_per_million_tokens: "0.0412"
+    output_usd_per_million_tokens: "0.0824"
+    currency: USD
+    effective_date: 2026-09-25
+    source: https://aws.amazon.com/bedrock/pricing/
+  - provider: aws-bedrock
+    model_id: meta.llama3-70b-instruct-v1:0
+    region: us-east-1
+    pricing_mode: on-demand-standard
+    input_usd_per_million_tokens: "2.65"
+    output_usd_per_million_tokens: "3.50"
+    currency: USD
+    effective_date: 2026-09-25
+    source: https://aws.amazon.com/bedrock/pricing/
+  - provider: aws-bedrock
+    model_id: openai.gpt-oss-20b-1:0
+    region: ap-southeast-2
+    pricing_mode: on-demand-standard
+    input_usd_per_million_tokens: "0.0721"
+    output_usd_per_million_tokens: "0.3090"
+    currency: USD
+    effective_date: 2026-09-26
+    source: https://aws.amazon.com/bedrock/pricing/

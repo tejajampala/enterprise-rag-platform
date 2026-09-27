@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections import deque
 from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager, suppress
+from decimal import Decimal
 from pathlib import Path
 from threading import BoundedSemaphore, Lock
 from time import monotonic
@@ -17,14 +18,23 @@ from consumer_finance_rag.access import AccessContext, AccessVisibility
 from consumer_finance_rag.config import AppSettings, PublicShowcaseSettings
 from consumer_finance_rag.evaluation.managed_rag import ManagedRAGEvaluationReport
 from consumer_finance_rag.factory import ApplicationRuntime
-from consumer_finance_rag.models import RetrievedChunk
+from consumer_finance_rag.models import RAGResponse, RetrievedChunk, StructuredContext
 from consumer_finance_rag.observability import (
     RetrievalMetrics,
     RetrievalStatus,
     RetrievalTelemetrySink,
+    TraceSpan,
     bedrock_token_usage,
 )
 from consumer_finance_rag.pii import PIIHandlingPolicy
+from consumer_finance_rag.presentation import citation_references
+from consumer_finance_rag.quality_policy import (
+    QualityDecision,
+    QualityProfile,
+    QualityStatus,
+    RuntimeQualityContext,
+)
+from consumer_finance_rag.runtime_groundedness import RuntimeQualityGate
 
 
 class PublicShowcaseConfigurationError(RuntimeError):
@@ -34,10 +44,17 @@ class PublicShowcaseConfigurationError(RuntimeError):
 class PublicRequestError(RuntimeError):
     """Bounded error safe to render without exposing an internal exception."""
 
-    def __init__(self, code: str, public_message: str) -> None:
+    def __init__(
+        self,
+        code: str,
+        public_message: str,
+        *,
+        request_id: str | None = None,
+    ) -> None:
         super().__init__(public_message)
         self.code = code
         self.public_message = public_message
+        self.request_id = request_id
 
 
 class PublicCitation(BaseModel):
@@ -86,6 +103,18 @@ class PublicModelMetadata(BaseModel):
     generation_model: str
 
 
+class PublicQualityDecision(BaseModel):
+    """Allowlisted public gate result without rationale, trace, or provider identifiers."""
+
+    model_config = ConfigDict(frozen=True)
+
+    status: QualityStatus
+    profile: QualityProfile
+    policy_version: str
+    blocking_judge_invoked: bool
+    estimated_judge_cost_usd: Decimal | None = Field(default=None, ge=0)
+
+
 class PublicAnswer(BaseModel):
     """Public response without retrieved text or unrestricted provider metadata."""
 
@@ -96,6 +125,7 @@ class PublicAnswer(BaseModel):
     trace: PublicTraceSummary
     models: PublicModelMetadata
     token_usage: dict[str, int] | None
+    quality_decision: PublicQualityDecision
 
 
 class RequestTelemetryCollector(RetrievalTelemetrySink):
@@ -184,9 +214,7 @@ def validate_public_showcase_runtime(
     retrieval = runtime.retrieval
     service = retrieval.retrieval_service
     if not showcase.enabled:
-        raise PublicShowcaseConfigurationError(
-            "The public showcase is disabled by configuration."
-        )
+        raise PublicShowcaseConfigurationError("The public showcase is disabled by configuration.")
     if settings.runtime.profile != "managed" or retrieval.profile != "managed":
         raise PublicShowcaseConfigurationError(
             "The public showcase requires the managed runtime profile."
@@ -206,6 +234,10 @@ def validate_public_showcase_runtime(
     if not settings.models.generation.model:
         raise PublicShowcaseConfigurationError(
             "The public showcase requires an explicitly configured Bedrock generation model."
+        )
+    if settings.quality_policy.default_profile is QualityProfile.EVALUATION:
+        raise PublicShowcaseConfigurationError(
+            "The public showcase runtime policy must be STANDARD or STRICT."
         )
 
 
@@ -230,12 +262,17 @@ class PublicRAGService:
         runtime: ApplicationRuntime,
         telemetry: RequestTelemetryCollector,
         gate: PublicInferenceGate,
+        quality_gate: RuntimeQualityGate | None = None,
     ) -> None:
         validate_public_showcase_runtime(settings, runtime)
         self._settings = settings
         self._runtime = runtime
         self._telemetry = telemetry
         self._gate = gate
+        self._quality_gate = quality_gate or RuntimeQualityGate(
+            settings.quality_policy,
+            runtime.pipeline.tracer,
+        )
 
     def answer(self, question: str) -> PublicAnswer:
         normalized = normalize_public_question(
@@ -247,11 +284,74 @@ class PublicRAGService:
             try:
                 detector = self._runtime.pipeline.retrieval.pii_detector
                 safe_question = detector.redact(normalized)
+                decisions: list[QualityDecision] = []
+                relevance_decisions: list[QualityDecision] = []
+
+                def approve_evidence(context: StructuredContext, parent_span: TraceSpan) -> None:
+                    self._validate_public_result(
+                        request_id,
+                        request_id,
+                        context.chunks,
+                        None,
+                    )
+                    decision = self._quality_gate.evaluate_pre_generation(
+                        context,
+                        request_id=request_id,
+                        parent_span=parent_span,
+                    )
+                    relevance_decisions.append(decision)
+                    if not decision.deliver_answer:
+                        raise PublicRequestError(
+                            "insufficient_relevant_evidence",
+                            "Unable to answer from available sources",
+                        )
+
+                def approve(candidate: RAGResponse, parent_span: TraceSpan) -> RAGResponse:
+                    safe_candidate = candidate.model_copy(
+                        update={"answer": detector.redact(candidate.answer)}
+                    )
+                    self._validate_public_result(
+                        request_id,
+                        safe_candidate.request_id,
+                        safe_candidate.retrieved_chunks,
+                        None,
+                    )
+                    references = citation_references(safe_candidate.answer)
+                    available_citations = {item.citation_id for item in safe_candidate.citations}
+                    relevance = relevance_decisions[-1].checks[0]
+                    decision = self._quality_gate.evaluate(
+                        safe_candidate,
+                        RuntimeQualityContext(
+                            request_id=request_id,
+                            user_authorized=True,
+                            corpus_authorized=True,
+                            evidence_available=bool(safe_candidate.retrieved_chunks),
+                            evidence_relevant=True,
+                            evidence_relevance_score=relevance.score,
+                            evidence_relevance_threshold=relevance.threshold,
+                            citations_present=bool(references),
+                            citations_valid=bool(references)
+                            and references.issubset(available_citations),
+                            output_schema_valid=bool(safe_candidate.answer.strip()),
+                            pii_policy_satisfied=not bool(detector.detect(safe_candidate.answer)),
+                        ),
+                        parent_span=parent_span,
+                    )
+                    decisions.append(decision)
+                    if not decision.deliver_answer:
+                        raise PublicRequestError(
+                            "quality_gate_blocked",
+                            "The answer could not be approved from the available evidence.",
+                        )
+                    return safe_candidate
+
                 response = self._runtime.pipeline.answer(
                     safe_question,
                     access_context=AccessContext(),
                     pii_policy=PIIHandlingPolicy.REDACT,
                     request_id=request_id,
+                    pre_generation_gate=approve_evidence,
+                    pre_response_gate=approve,
                 )
                 metrics = self._telemetry.pop(request_id)
                 self._validate_public_result(
@@ -260,7 +360,8 @@ class PublicRAGService:
                     response.retrieved_chunks,
                     metrics,
                 )
-                safe_answer = detector.redact(response.answer)
+                safe_answer = response.answer
+                quality_decision = decisions[-1]
                 return PublicAnswer(
                     answer=safe_answer,
                     citations=tuple(
@@ -284,15 +385,33 @@ class PublicRAGService:
                         generation_model=response.model_metadata.generation_model,
                     ),
                     token_usage=bedrock_token_usage(response.generation_metadata),
+                    quality_decision=PublicQualityDecision(
+                        status=quality_decision.status,
+                        profile=quality_decision.profile,
+                        policy_version=quality_decision.policy_version,
+                        blocking_judge_invoked=(
+                            quality_decision.judge_execution is not None
+                            and quality_decision.judge_execution.usage is not None
+                            and quality_decision.judge_execution.usage.provider_call_count > 0
+                        ),
+                        estimated_judge_cost_usd=(
+                            quality_decision.judge_execution.estimated_cost_usd
+                            if quality_decision.judge_execution is not None
+                            else None
+                        ),
+                    ),
                 )
-            except PublicRequestError:
+            except PublicRequestError as error:
                 self._telemetry.pop(request_id)
+                if error.request_id is None:
+                    error.request_id = request_id
                 raise
             except Exception as error:
                 self._telemetry.pop(request_id)
                 raise PublicRequestError(
                     "request_failed",
                     "The request could not be completed. Please try again later.",
+                    request_id=request_id,
                 ) from error
 
     def _validate_public_result(
@@ -310,10 +429,9 @@ class PublicRAGService:
         for item in chunks:
             metadata = item.chunk.metadata
             text = item.chunk.text
-            if (
-                metadata.get("access_visibility") != AccessVisibility.PUBLIC.value
-                or metadata.get("allowed_groups") not in ([], (), None)
-            ):
+            if metadata.get("access_visibility") != AccessVisibility.PUBLIC.value or metadata.get(
+                "allowed_groups"
+            ) not in ([], (), None):
                 raise PublicRequestError("acl_failed", "Request validation failed.")
             if service.pii_detector.detect(text):
                 raise PublicRequestError("pii_failed", "Request validation failed.")
@@ -348,9 +466,7 @@ def load_managed_showcase_report(
     )
     for path in candidates:
         try:
-            return ManagedRAGEvaluationReport.model_validate_json(
-                path.read_text(encoding="utf-8")
-            )
+            return ManagedRAGEvaluationReport.model_validate_json(path.read_text(encoding="utf-8"))
         except (OSError, ValueError):
             continue
     return None
@@ -391,6 +507,10 @@ def _public_trace_summary(
         qdrant_collection=retrieval.qdrant_collection,
         total_retrieval_latency_ms=metrics.total_retrieval_latency_ms,
         stages=(
+            PublicRetrievalStage(
+                stage="Query embedding",
+                latency_ms=metrics.query_embedding_latency_ms,
+            ),
             PublicRetrievalStage(
                 stage="Dense HNSW search",
                 latency_ms=metrics.dense_search_latency_ms,

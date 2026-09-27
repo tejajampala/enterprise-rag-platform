@@ -2,9 +2,11 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+from pydantic import ValidationError
 from pytest import MonkeyPatch
 
-from consumer_finance_rag.config import load_settings
+from consumer_finance_rag.config import MLflowSettings, load_settings
 
 CONFIG = """
 models:
@@ -29,6 +31,7 @@ def test_configuration_loads_yaml_and_standard_environment_aliases(
     monkeypatch.setenv("RAG__MODELS__EMBEDDING__QUERY_PROMPT_NAME", "custom-query")
     monkeypatch.setenv("RAG__QDRANT__COLLECTION_NAME", "environment-collection")
     monkeypatch.setenv("MLFLOW_GENAI_JUDGE_DEFAULT_MODEL", "bedrock:/test.judge-model-v1")
+    monkeypatch.setenv("MLFLOW_GENAI_JUDGE_REGION", "us-east-1")
 
     settings = load_settings(path)
 
@@ -37,6 +40,9 @@ def test_configuration_loads_yaml_and_standard_environment_aliases(
     assert settings.models.generation.model == "test.bedrock-model-v1"
     assert settings.aws.region == "ap-southeast-2"
     assert settings.mlflow.judge_model == "bedrock:/test.judge-model-v1"
+    assert settings.mlflow.judge_region == "us-east-1"
+    assert settings.mlflow.ragas_judge_max_tokens == 1024
+    assert settings.mlflow.ragas_context_precision_max_tokens == 2048
     assert settings.aws.connect_timeout_seconds == 5
     assert settings.aws.read_timeout_seconds == 120
     assert settings.aws.retry_mode == "standard"
@@ -47,6 +53,59 @@ def test_configuration_loads_yaml_and_standard_environment_aliases(
     assert settings.qdrant.collection_name == "environment-collection"
     assert settings.evaluation.qdrant_collection_name == "consumer_finance_evaluation"
     assert settings.evaluation.bm25_state_path == Path("data/index/evaluation_bm25_state.json")
+    assert settings.private_workbench.judge_call_debug_directory == Path(
+        "reports/evaluation/private_judge_calls"
+    )
+    assert settings.private_workbench.judge_call_debug_retention_hours == 24
+
+
+def test_judge_region_defaults_to_final_application_region(
+    tmp_path: Path, monkeypatch: MonkeyPatch
+) -> None:
+    path = tmp_path / "config.yaml"
+    path.write_text(CONFIG, encoding="utf-8")
+    monkeypatch.setenv("AWS_REGION", "ap-southeast-2")
+
+    settings = load_settings(path)
+
+    assert settings.aws.region == "ap-southeast-2"
+    assert settings.mlflow.judge_region == "ap-southeast-2"
+
+
+def test_repository_default_uses_gpt_oss_sydney_and_keeps_llama_profile() -> None:
+    settings = load_settings()
+
+    assert settings.models.generation.model == "google.gemma-3-4b-it"
+    assert settings.aws.region == "ap-southeast-2"
+    assert settings.mlflow.judge_model == "bedrock:/openai.gpt-oss-20b-1:0"
+    assert settings.mlflow.judge_region == "ap-southeast-2"
+    assert settings.mlflow.ragas_judge_max_tokens == 1024
+    assert settings.mlflow.ragas_context_precision_max_tokens == 2048
+    strict = settings.quality_policy.strict
+    assert strict.judge_model_id == "openai.gpt-oss-20b-1:0"
+    assert strict.judge_region == "ap-southeast-2"
+    assert strict.groundedness_threshold == 0.8
+    assert strict.judge_max_input_tokens == 8192
+    assert strict.judge_max_output_tokens == 1024
+    assert strict.judge_max_retries == 0
+    assert strict.judge_timeout_seconds == 8
+    assert strict.judge_budget_usd == 0.01
+    profiles = {item.name: item for item in settings.private_workbench.judge_profiles}
+    assert profiles["Llama 3 70B (historical baseline)"].configuration_uri == (
+        "bedrock:/meta.llama3-70b-instruct-v1:0"
+    )
+    assert profiles["Llama 3 70B (historical baseline)"].region == "us-east-1"
+
+
+def test_context_precision_output_limit_cannot_be_lower_than_default() -> None:
+    with pytest.raises(
+        ValidationError,
+        match="ragas_context_precision_max_tokens cannot be lower",
+    ):
+        MLflowSettings(
+            ragas_judge_max_tokens=2048,
+            ragas_context_precision_max_tokens=1024,
+        )
 
 
 def test_application_database_is_optional(tmp_path: Path, monkeypatch: MonkeyPatch) -> None:
@@ -172,6 +231,29 @@ def test_public_showcase_is_fail_closed_and_environment_configurable(
     assert overridden.inference_enabled is True
     assert overridden.max_requests_per_window == 7
     assert overridden.max_concurrent_requests == 1
+
+
+def test_private_workbench_evaluation_defaults_are_environment_configurable(
+    tmp_path: Path,
+    monkeypatch: MonkeyPatch,
+) -> None:
+    path = tmp_path / "config.yaml"
+    path.write_text(CONFIG, encoding="utf-8")
+
+    defaults = load_settings(path).private_workbench
+    assert defaults.automatic_evaluation_enabled is True
+    assert defaults.default_mlflow_judges is True
+    assert defaults.default_ragas is True
+    assert defaults.default_save_to_mlflow is True
+
+    monkeypatch.setenv("RAG__PRIVATE_WORKBENCH__DEFAULT_MLFLOW_JUDGES", "false")
+    monkeypatch.setenv("RAG__PRIVATE_WORKBENCH__DEFAULT_RAGAS", "false")
+    monkeypatch.setenv("RAG__PRIVATE_WORKBENCH__DEFAULT_SAVE_TO_MLFLOW", "false")
+
+    overridden = load_settings(path).private_workbench
+    assert overridden.default_mlflow_judges is False
+    assert overridden.default_ragas is False
+    assert overridden.default_save_to_mlflow is False
 
 
 def test_drift_thresholds_are_typed_and_environment_configurable(

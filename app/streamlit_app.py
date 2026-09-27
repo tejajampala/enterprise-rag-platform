@@ -2,10 +2,21 @@
 
 from __future__ import annotations
 
-import pandas as pd  # type: ignore[import-untyped]
+import logging
+from datetime import date
+from enum import StrEnum
+from time import monotonic
+from uuid import uuid4
+
 import streamlit as st
 
 from consumer_finance_rag.config import AppSettings, load_settings
+from consumer_finance_rag.costs import (
+    CostEstimate,
+    combine_cost_estimates,
+    estimate_generation_cost,
+    load_pricing_catalog,
+)
 from consumer_finance_rag.evaluation.managed_rag import (
     JudgeStageSummary,
     ManagedRAGEvaluationReport,
@@ -17,6 +28,7 @@ from consumer_finance_rag.factory import (
     build_runtime_retrieval,
 )
 from consumer_finance_rag.observability import NoOpTracer, TraceContentPolicy
+from consumer_finance_rag.presentation import cited_only
 from consumer_finance_rag.public_showcase import (
     PublicAnswer,
     PublicInferenceGate,
@@ -25,6 +37,7 @@ from consumer_finance_rag.public_showcase import (
     RequestTelemetryCollector,
     load_managed_showcase_report,
 )
+from consumer_finance_rag.usage_presentation import format_usd
 
 st.set_page_config(
     page_title="Consumer Finance Intelligence",
@@ -38,7 +51,7 @@ st.markdown(
     """
     <style>
     .stApp { background: linear-gradient(145deg, #f7fafc 0%, #edf5f3 100%); }
-    .block-container { max-width: 1180px; padding-top: 2rem; }
+    .block-container { max-width: 860px; padding-top: 2rem; }
     .hero {
         padding: 2.2rem; border-radius: 22px; color: #f8fafc;
         background: linear-gradient(125deg, #12372a 0%, #1f6650 58%, #267f68 100%);
@@ -69,6 +82,51 @@ SUGGESTIONS = (
     "When should I receive a mortgage Closing Disclosure?",
     "What information must a debt collector give me?",
 )
+
+LOGGER = logging.getLogger(__name__)
+
+
+class PublicRequestState(StrEnum):
+    IDLE = "IDLE"
+    RUNNING = "RUNNING"
+    COMPLETED = "COMPLETED"
+    ABSTAINED = "ABSTAINED"
+    ERROR = "ERROR"
+
+
+def _request_state() -> PublicRequestState:
+    raw = st.session_state.setdefault("public_request_state", PublicRequestState.IDLE.value)
+    try:
+        return PublicRequestState(str(raw))
+    except ValueError:
+        st.session_state.public_request_state = PublicRequestState.IDLE.value
+        return PublicRequestState.IDLE
+
+
+def _transition_request(
+    state: PublicRequestState,
+    *,
+    request_id: str | None = None,
+) -> None:
+    previous = _request_state()
+    st.session_state.public_request_state = state.value
+    started = st.session_state.get("public_request_started_at")
+    elapsed_ms = max(0.0, (monotonic() - started) * 1000.0) if isinstance(started, float) else None
+    LOGGER.info(
+        "public_request_transition submission_id=%s request_id=%s from=%s to=%s elapsed_ms=%s",
+        st.session_state.get("public_submission_id", "unavailable"),
+        request_id or "unavailable",
+        previous.value,
+        state.value,
+        f"{elapsed_ms:.1f}" if elapsed_ms is not None else "unavailable",
+    )
+
+
+def _disclaimer() -> None:
+    st.caption(
+        "Educational demonstration only. Answers come from public sources and are not legal "
+        "or financial advice."
+    )
 
 
 @st.cache_resource
@@ -106,31 +164,13 @@ def _startup(settings: AppSettings) -> tuple[PublicRAGService | None, Applicatio
         return None, None
 
 
-def _hero(settings: AppSettings, application: ApplicationRuntime | None) -> None:
-    runtime = application.retrieval if application is not None else None
-    runtime_metadata = dict(runtime.display_metadata()) if runtime is not None else {}
-    generation = runtime_metadata.get("Generation", "unavailable")
-    st.markdown(
-        f"""
-        <section class="hero">
-          <div class="eyebrow">Managed hybrid RAG · local public showcase</div>
-          <h1>Consumer Finance Intelligence</h1>
-          <p>Evidence-grounded answers over an immutable managed index, with anonymous
-          PUBLIC-only retrieval, deterministic PII redaction, request-bound observability,
-          and source citations. Serving generation: <strong>{generation}</strong>.</p>
-        </section>
-        """,
-        unsafe_allow_html=True,
-    )
-    cols = st.columns(4)
-    values = (
-        ("Serving profile", runtime_metadata.get("Retrieval profile", settings.runtime.profile)),
-        ("Corpus", settings.public_showcase.approved_corpus_key),
-        ("Generation", generation),
-        ("Inference", "enabled" if settings.public_showcase.inference_enabled else "paused"),
-    )
-    for column, (label, value) in zip(cols, values, strict=True):
-        column.metric(label, value)
+def _hero(*, compact: bool = False) -> None:
+    st.title("Consumer Finance Assistant")
+    if not compact:
+        st.write(
+            "Ask about U.S. consumer-finance topics and get an answer based on reviewed "
+            "public information. Sources are shown with each supported answer."
+        )
 
 
 def _overview() -> None:
@@ -180,65 +220,83 @@ def _question_picker() -> None:
             st.session_state.public_question = suggestion
 
 
-def _answer_panel(answer: PublicAnswer) -> None:
-    st.markdown("### Grounded answer")
+def _answer_panel(answer: PublicAnswer, settings: AppSettings) -> None:
+    st.markdown("### Answer")
     st.markdown(answer.answer)
     st.markdown("#### Sources")
-    for citation in answer.citations:
-        if citation.source_url:
-            st.markdown(
-                f"**[{citation.citation_id}]** [{citation.title}]({citation.source_url})  "
-                f"\n`{citation.chunk_id}`"
-            )
-        else:
-            st.markdown(
-                f"**[{citation.citation_id}]** {citation.title}  \n`{citation.chunk_id}`"
-            )
-
-    with st.expander("Retrieval-stage timeline", expanded=True):
-        if answer.trace.stages:
-            frame = pd.DataFrame(
-                [
-                    {
-                        "Stage": stage.stage,
-                        "Latency (ms)": stage.latency_ms,
-                        "Candidates": stage.candidate_count,
-                    }
-                    for stage in answer.trace.stages
-                ]
-            )
-            st.dataframe(frame, hide_index=True, width="stretch")
-        else:
-            st.info("Request telemetry was unavailable; no timing is inferred.")
-
-    with st.expander("Sanitized request trace"):
+    citations = cited_only(answer.answer, answer.citations)
+    for citation in citations:
+        with st.container(border=True):
+            st.markdown(f"**[{citation.citation_id}] {citation.title}**")
+            if citation.source_url:
+                st.link_button("Open source", citation.source_url)
+    if not citations:
+        st.caption("No source citation was explicitly referenced in the generated answer.")
+    cost = _public_cost_summary(answer, settings)
+    usage = answer.token_usage or {}
+    st.caption(
+        f"Estimated request API cost: {cost['estimated_request_api_cost']} · "
+        f"Input tokens: {usage.get('input_tokens', 'Unavailable')} · "
+        f"Output tokens: {usage.get('output_tokens', 'Unavailable')}"
+    )
+    with st.expander("About this answer"):
         st.caption(
-            "This allowlist is request-specific. It contains no question, context text, "
-            "answer text, principal, group, or matched PII value."
+            "The answer used PUBLIC-only retrieval, deterministic privacy handling, and a "
+            "pre-delivery quality policy. Costs are estimates, not billed AWS totals."
         )
-        left, right = st.columns(2)
-        left.code(answer.trace.request_id, language=None)
-        left.caption("Request ID")
-        right.code(answer.trace.mlflow_trace_id or "unavailable", language=None)
-        right.caption("MLflow trace ID (operator UI remains private)")
-        st.json(answer.trace.model_dump(mode="json"), expanded=False)
+        st.markdown(
+            f"- Generation estimate: {cost['estimated_generation_api_cost']}\n"
+            f"- Blocking judge estimate: {cost['estimated_blocking_judge_api_cost']}\n"
+            f"- Quality decision: {answer.quality_decision.status.value}"
+        )
 
-    with st.expander("Models and immutable serving identity"):
-        st.markdown(f"- **Generation:** `g{answer.trace.generation:06d}`")
-        st.markdown(f"- **Index state:** `{answer.trace.index_state_id}`")
-        st.markdown(f"- **Collection:** `{answer.trace.qdrant_collection}`")
-        st.markdown(f"- **Embedding:** `{answer.models.embedding_model}`")
-        st.markdown(f"- **Reranker:** `{answer.models.reranker_model}`")
-        st.markdown(f"- **Bedrock generation:** `{answer.models.generation_model}`")
-        if answer.token_usage is None:
-            st.caption("Provider token usage unavailable.")
-        else:
-            st.caption(
-                "Token usage: "
-                f"{answer.token_usage['input_tokens']} input · "
-                f"{answer.token_usage['output_tokens']} output · "
-                f"{answer.token_usage['total_tokens']} total"
+
+def _public_cost_summary(answer: PublicAnswer, settings: AppSettings) -> dict[str, str]:
+    generation = estimate_generation_cost(
+        answer.token_usage,
+        load_pricing_catalog(),
+        provider="aws-bedrock",
+        model_id=answer.models.generation_model,
+        region=settings.aws.region,
+        pricing_mode="on-demand-standard",
+        as_of=date.today(),
+    )
+    components: dict[str, CostEstimate | None] = {"generation": generation}
+    quality = answer.quality_decision
+    if quality.blocking_judge_invoked:
+        judge = (
+            CostEstimate(
+                available=True,
+                estimated_api_cost=quality.estimated_judge_cost_usd,
+                currency="USD",
             )
+            if quality.estimated_judge_cost_usd is not None
+            else CostEstimate(available=False, reason="Runtime judge cost unavailable")
+        )
+        components["blocking groundedness judge"] = judge
+        judge_label = format_usd(judge.estimated_api_cost)
+    else:
+        judge_label = "Not applicable"
+    combined = combine_cost_estimates(components)
+    has_known_cost = any(
+        estimate is not None
+        and estimate.available
+        and estimate.estimated_api_cost is not None
+        and estimate.currency == "USD"
+        for estimate in components.values()
+    )
+    total_label = (
+        format_usd(combined.known_estimated_cost)
+        if combined.complete
+        else f"Known subtotal {format_usd(combined.known_estimated_cost)}; total unavailable"
+        if has_known_cost
+        else "Cost unavailable"
+    )
+    return {
+        "estimated_generation_api_cost": format_usd(generation.estimated_api_cost),
+        "estimated_blocking_judge_api_cost": judge_label,
+        "estimated_request_api_cost": total_label,
+    }
 
 
 def _ask(
@@ -246,6 +304,51 @@ def _ask(
     service: PublicRAGService | None,
     runtime: ApplicationRuntime | None,
 ) -> None:
+    state = _request_state()
+    current = st.session_state.get("public_answer")
+    if state in {
+        PublicRequestState.COMPLETED,
+        PublicRequestState.ABSTAINED,
+        PublicRequestState.ERROR,
+    }:
+        _hero(compact=True)
+        _disclaimer()
+        submitted = st.session_state.get("public_submitted_question")
+        if isinstance(submitted, str):
+            st.caption("Your question")
+            st.markdown(f"**{submitted}**")
+        if state is PublicRequestState.COMPLETED and isinstance(current, PublicAnswer):
+            _answer_panel(current, settings)
+        elif state is PublicRequestState.ABSTAINED:
+            st.markdown("### Unable to answer from available sources")
+            st.write(
+                "The reviewed public material retrieved for this question was not "
+                "relevant enough to support an answer. No candidate answer was shown."
+            )
+        else:
+            st.markdown("### Request could not be completed")
+            st.write("Please try again later or ask another consumer-finance question.")
+        if st.button("Ask another question", type="primary", width="stretch"):
+            _reset_public_request()
+            st.rerun()
+        return
+
+    if state is PublicRequestState.RUNNING:
+        _hero(compact=True)
+        _disclaimer()
+        submitted = st.session_state.get("public_submitted_question")
+        if isinstance(submitted, str):
+            st.caption("Your question")
+            st.markdown(f"**{submitted}**")
+        st.info(
+            "Request in progress: searching reviewed sources and applying the configured "
+            "quality policy."
+        )
+        _run_public_request(service)
+        return
+
+    _hero()
+    _disclaimer()
     _question_picker()
     question = st.text_area(
         "Ask a consumer-finance question",
@@ -256,6 +359,10 @@ def _ask(
     )
     remaining = settings.public_showcase.max_question_characters - len(question)
     st.caption(f"{remaining} characters remaining · anonymous PUBLIC-only request")
+    st.warning(
+        "Do not enter account numbers, Social Security numbers, or other sensitive personal "
+        "information."
+    )
 
     ready = service is not None and runtime is not None
     if not settings.public_showcase.enabled:
@@ -263,31 +370,93 @@ def _ask(
     elif not settings.public_showcase.inference_enabled:
         st.warning("Answer generation is paused by the operator kill switch.")
     elif not ready:
-        st.error(
-            "The managed serving runtime is unavailable. No request was sent to Bedrock."
-        )
+        st.error("The managed serving runtime is unavailable. No request was sent to Bedrock.")
 
     if st.button(
-        "Generate grounded answer",
+        "Get answer",
         type="primary",
         width="stretch",
         disabled=not ready or not settings.public_showcase.inference_enabled,
     ):
-        try:
-            with st.spinner("Searching the pinned managed generation and generating an answer…"):
-                st.session_state.public_answer = service.answer(question) if service else None
-        except PublicRequestError as error:
-            st.error(error.public_message)
-        except Exception:
-            st.error("The request could not be completed. Please try again later.")
+        if _request_state() is not PublicRequestState.IDLE:
+            return
+        _clear_public_result()
+        st.session_state.public_submitted_question = question.strip()
+        st.session_state.public_submission_id = str(uuid4())
+        st.session_state.public_request_started_at = monotonic()
+        st.session_state.public_invocation_started = False
+        _transition_request(PublicRequestState.RUNNING)
+        st.rerun()
 
-    current = st.session_state.get("public_answer")
-    if isinstance(current, PublicAnswer):
-        _answer_panel(current)
+
+def _run_public_request(service: PublicRAGService | None) -> None:
+    """Run one accepted submission once, then force one terminal-state rerun."""
+
+    if bool(st.session_state.get("public_invocation_started")):
+        st.session_state.public_failure = {
+            "code": "request_interrupted",
+            "message": "The in-progress request was interrupted.",
+        }
+        _transition_request(PublicRequestState.ERROR)
+        st.rerun()
+        return
+
+    st.session_state.public_invocation_started = True
+    submitted = st.session_state.get("public_submitted_question")
+    try:
+        if service is None or not isinstance(submitted, str):
+            raise RuntimeError("Public serving runtime is unavailable")
+        with st.spinner("Searching reviewed sources and preparing an answer…"):
+            answer = service.answer(submitted)
+        st.session_state.public_answer = answer
+        st.session_state.public_result_request_id = answer.trace.request_id
+        _transition_request(
+            PublicRequestState.COMPLETED,
+            request_id=answer.trace.request_id,
+        )
+    except PublicRequestError as error:
+        st.session_state.public_failure = {
+            "code": error.code,
+            "message": error.public_message,
+        }
+        if error.request_id is not None:
+            st.session_state.public_result_request_id = error.request_id
+        terminal = (
+            PublicRequestState.ABSTAINED
+            if error.code == "insufficient_relevant_evidence"
+            else PublicRequestState.ERROR
+        )
+        _transition_request(terminal, request_id=error.request_id)
+    except Exception:
+        st.session_state.public_failure = {"code": "request_failed"}
+        _transition_request(PublicRequestState.ERROR)
+    st.rerun()
+
+
+def _clear_public_result() -> None:
+    for key in (
+        "public_answer",
+        "public_failure",
+        "public_result_request_id",
+    ):
+        st.session_state.pop(key, None)
+
+
+def _reset_public_request() -> None:
+    _clear_public_result()
+    for key in (
+        "public_submitted_question",
+        "public_submission_id",
+        "public_request_started_at",
+        "public_invocation_started",
+    ):
+        st.session_state.pop(key, None)
+    st.session_state.public_request_state = PublicRequestState.IDLE.value
+    st.session_state.public_question = ""
 
 
 def _architecture() -> None:
-    st.subheader("Serving architecture")
+    st.subheader("Compact serving architecture")
     st.graphviz_chart(
         """
         digraph serving {
@@ -302,23 +471,9 @@ def _architecture() -> None:
         """,
         width="stretch",
     )
-    st.subheader("Control plane and immutable generations")
-    st.graphviz_chart(
-        """
-        digraph lifecycle {
-          rankdir=LR; bgcolor="transparent";
-          node [shape=box style="rounded,filled" fillcolor="#f7fffb" color="#267f68"];
-          Source -> Version -> Chunks -> "Derived ACL/PII" -> "Build generation";
-          "Build generation" -> "Qdrant gN" -> ACTIVE;
-          ACTIVE -> "Pinned runtime";
-          "Old runtime" -> "Qdrant gN-1" [style=dashed];
-        }
-        """,
-        width="stretch",
-    )
     st.caption(
-        "PostgreSQL is the lineage/control plane. Qdrant is the immutable serving data plane. "
-        "The public tunnel exposes only this Streamlit process."
+        "PostgreSQL owns immutable lineage and the ACTIVE generation pointer. Qdrant serves the "
+        "pinned PUBLIC generation. The public tunnel exposes only this Streamlit process."
     )
 
 
@@ -391,9 +546,7 @@ def _managed_evaluation(report: ManagedRAGEvaluationReport | None) -> None:
             values.append(("Total tokens", generation.token_usage.total_tokens))
         _metric_row(tuple(values))
     else:
-        st.caption(
-            "Answer generation was not run or did not complete for this saved report."
-        )
+        st.caption("Answer generation was not run or did not complete for this saved report.")
 
     left, right = st.columns(2)
     with left:
@@ -462,28 +615,20 @@ def _limitations(settings: AppSettings) -> None:
     )
 
 
-try:
-    settings = load_settings()
-except Exception:
-    st.error(
-        "The showcase configuration is unavailable. The operator can inspect the private "
-        "preflight output for details."
-    )
-    st.stop()
+def main() -> None:
+    try:
+        settings = load_settings()
+    except Exception:
+        st.error(
+            "The showcase configuration is unavailable. The operator can inspect the private "
+            "preflight output for details."
+        )
+        st.stop()
+        return
 
-service, runtime = _startup(settings)
-_hero(settings, runtime)
-
-overview_tab, ask_tab, architecture_tab, evaluation_tab, limitations_tab = st.tabs(
-    ["Overview", "Ask", "Architecture", "Evaluation", "Safety & limits"]
-)
-with overview_tab:
-    _overview()
-with ask_tab:
+    service, runtime = _startup(settings)
     _ask(settings, service, runtime)
-with architecture_tab:
-    _architecture()
-with evaluation_tab:
-    _evaluation(settings, runtime)
-with limitations_tab:
-    _limitations(settings)
+
+
+if __name__ == "__main__":
+    main()

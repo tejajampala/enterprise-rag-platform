@@ -5,15 +5,16 @@ from __future__ import annotations
 import json
 import logging
 import warnings
+from collections import Counter
 from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
-from typing import Any, Protocol
+from typing import Any, Literal, Protocol, cast
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from consumer_finance_rag.config import MLflowSettings
 from consumer_finance_rag.models import RetrievedChunk
@@ -106,6 +107,7 @@ class RetrievalMetrics:
     qdrant_collection: str | None
     query_timestamp: datetime
     total_retrieval_latency_ms: float
+    query_embedding_latency_ms: float | None
     dense_search_latency_ms: float | None
     sparse_search_latency_ms: float | None
     fusion_latency_ms: float | None
@@ -142,6 +144,7 @@ class RetrievalMetrics:
             "qdrant_collection": self.qdrant_collection,
             "query_timestamp": self.query_timestamp.isoformat(),
             "total_retrieval_latency_ms": self.total_retrieval_latency_ms,
+            "query_embedding_latency_ms": self.query_embedding_latency_ms,
             "dense_search_latency_ms": self.dense_search_latency_ms,
             "sparse_search_latency_ms": self.sparse_search_latency_ms,
             "fusion_latency_ms": self.fusion_latency_ms,
@@ -220,6 +223,19 @@ class TraceSpan(Protocol):
     def set_attributes(self, attributes: dict[str, Any]) -> None: ...
 
 
+class TracePersistenceResult(BaseModel):
+    """Result of an exact, read-only backend verification after trace export."""
+
+    model_config = ConfigDict(frozen=True)
+
+    status: Literal[
+        "CONFIRMED", "PENDING", "HIERARCHY_INCOMPLETE", "FAILED", "UNAVAILABLE"
+    ]
+    reason: str
+    persisted_span_count: int | None = Field(default=None, ge=0)
+    persisted_provider_call_count: int | None = Field(default=None, ge=0)
+
+
 class Tracer(Protocol):
     @contextmanager
     def span(
@@ -228,6 +244,7 @@ class Tracer(Protocol):
         *,
         span_type: str,
         attributes: dict[str, Any] | None = None,
+        parent_span: TraceSpan | None = None,
     ) -> Iterator[TraceSpan]: ...
 
 
@@ -266,8 +283,31 @@ class NoOpTracer:
         *,
         span_type: str,
         attributes: dict[str, Any] | None = None,
+        parent_span: TraceSpan | None = None,
     ) -> Iterator[TraceSpan]:
+        del parent_span
         yield NoOpSpan()
+
+    def verify_trace(
+        self,
+        trace_id: str,
+        *,
+        expected_client_request_id: str,
+        expected_span_count: int,
+        expected_metric_names: tuple[str, ...] = (),
+        expected_provider_call_count: int = 0,
+    ) -> TracePersistenceResult:
+        del (
+            trace_id,
+            expected_client_request_id,
+            expected_span_count,
+            expected_metric_names,
+            expected_provider_call_count,
+        )
+        return TracePersistenceResult(
+            status="UNAVAILABLE",
+            reason="MLflow tracing is disabled.",
+        )
 
 
 class MLflowTracer:
@@ -304,22 +344,201 @@ class MLflowTracer:
         *,
         span_type: str,
         attributes: dict[str, Any] | None = None,
+        parent_span: TraceSpan | None = None,
     ) -> Iterator[TraceSpan]:
         if not self._active:
             yield NoOpSpan()
             return
         import mlflow
 
+        correlation_id: str | None = None
+        if name in {"rag_request", "ragas_evaluation"} and attributes is not None:
+            correlation_value = (
+                attributes.get("request.id")
+                if name == "rag_request"
+                else attributes.get("evaluation.client_request_id")
+            )
+            if isinstance(correlation_value, str):
+                correlation_id = validate_mlflow_client_request_id(correlation_value)
+
+        if parent_span is not None:
+            span = mlflow.start_span_no_context(
+                name=name,
+                span_type=span_type,
+                parent_span=cast(Any, parent_span),
+                attributes=attributes,
+            )
+            try:
+                yield span
+            finally:
+                span.end()
+            return
+
         with mlflow.start_span(name=name, span_type=span_type, attributes=attributes) as span:
-            if name == "rag_request" and attributes is not None:
-                request_id = attributes.get("request.id")
-                if isinstance(request_id, str):
-                    mlflow.update_current_trace(
-                        client_request_id=request_id,
-                        request_preview="[QUESTION OMITTED]",
-                        response_preview="[ANSWER OMITTED]",
-                    )
+            if correlation_id is not None:
+                mlflow.update_current_trace(
+                    client_request_id=correlation_id,
+                    request_preview="[QUESTION OMITTED]",
+                    response_preview="[ANSWER OMITTED]",
+                )
             yield span
+
+    def verify_trace(
+        self,
+        trace_id: str,
+        *,
+        expected_client_request_id: str,
+        expected_span_count: int,
+        expected_metric_names: tuple[str, ...] = (),
+        expected_provider_call_count: int = 0,
+    ) -> TracePersistenceResult:
+        """Flush the async exporter, then verify this exact trace without inference calls."""
+
+        if not self._active:
+            return TracePersistenceResult(
+                status="UNAVAILABLE",
+                reason=self._reason or "MLflow tracing is unavailable.",
+            )
+        expected = validate_mlflow_client_request_id(expected_client_request_id)
+        try:
+            import mlflow
+
+            mlflow.flush_trace_async_logging()
+            trace = mlflow.MlflowClient(
+                tracking_uri=self._settings.tracking_uri
+            ).get_trace(trace_id, display=False)
+        except Exception as error:
+            if _is_missing_trace(error):
+                return TracePersistenceResult(
+                    status="PENDING",
+                    reason="Trace syncing: the exact trace is not retrievable yet.",
+                )
+            return TracePersistenceResult(
+                status="FAILED",
+                reason=f"Trace export verification failed ({type(error).__name__}).",
+            )
+        actual = getattr(trace.info, "client_request_id", None)
+        if actual != expected:
+            return TracePersistenceResult(
+                status="FAILED",
+                reason=(
+                    "Persisted trace correlation does not match the evaluation client "
+                    "request ID."
+                ),
+            )
+        spans = tuple(getattr(trace.data, "spans", ()))
+        provider_spans = [
+            span for span in spans if getattr(span, "name", None) == "bedrock_provider_call"
+        ]
+        persisted_provider_count = len(provider_spans)
+        state = str(getattr(trace.info, "state", ""))
+        if "IN_PROGRESS" in state or "UNSPECIFIED" in state:
+            return TracePersistenceResult(
+                status="PENDING",
+                reason="Trace syncing: MLflow reports the exact trace is still in progress.",
+                persisted_span_count=len(spans),
+                persisted_provider_call_count=persisted_provider_count,
+            )
+        if len(spans) < expected_span_count:
+            return TracePersistenceResult(
+                status="HIERARCHY_INCOMPLETE",
+                reason="Persisted trace is missing expected evaluation child spans.",
+                persisted_span_count=len(spans),
+                persisted_provider_call_count=persisted_provider_count,
+            )
+        root_count = sum(getattr(span, "name", None) == "ragas_evaluation" for span in spans)
+        if root_count != 1:
+            return TracePersistenceResult(
+                status="FAILED",
+                reason="Persisted evaluation trace has an invalid root-span hierarchy.",
+                persisted_span_count=len(spans),
+                persisted_provider_call_count=persisted_provider_count,
+            )
+        root_span = next(span for span in spans if span.name == "ragas_evaluation")
+        root_span_id = str(root_span.span_id)
+        span_ids = {
+            str(span_id)
+            for span in spans
+            if (span_id := getattr(span, "span_id", None)) is not None
+        }
+        disconnected_children = [
+            span
+            for span in spans
+            if getattr(span, "name", None) != "ragas_evaluation"
+            and (
+                (parent_id := getattr(span, "parent_id", None)) is None
+                or str(parent_id) not in span_ids
+            )
+        ]
+        if disconnected_children:
+            return TracePersistenceResult(
+                status="FAILED",
+                reason="Persisted evaluation trace contains a disconnected child span.",
+                persisted_span_count=len(spans),
+                persisted_provider_call_count=persisted_provider_count,
+            )
+        metric_spans = [
+            span for span in spans if str(getattr(span, "name", "")).startswith("ragas_metric:")
+        ]
+        actual_metric_names = tuple(
+            str(getattr(span, "name", "")).removeprefix("ragas_metric:")
+            for span in metric_spans
+        )
+        if Counter(actual_metric_names) != Counter(expected_metric_names):
+            return TracePersistenceResult(
+                status="HIERARCHY_INCOMPLETE",
+                reason="Persisted trace does not contain every expected RAGAS metric span.",
+                persisted_span_count=len(spans),
+                persisted_provider_call_count=persisted_provider_count,
+            )
+        if any(str(getattr(span, "parent_id", None)) != root_span_id for span in metric_spans):
+            return TracePersistenceResult(
+                status="HIERARCHY_INCOMPLETE",
+                reason="A persisted RAGAS metric span is not parented by the evaluation root.",
+                persisted_span_count=len(spans),
+                persisted_provider_call_count=persisted_provider_count,
+            )
+        metric_by_id = {str(span.span_id): span for span in metric_spans}
+        if expected_metric_names and expected_provider_call_count == 0:
+            return TracePersistenceResult(
+                status="HIERARCHY_INCOMPLETE",
+                reason=(
+                    "No LiteLLM completion invocation was observed for the requested "
+                    "RAGAS metrics."
+                ),
+                persisted_span_count=len(spans),
+                persisted_provider_call_count=persisted_provider_count,
+            )
+        if len(provider_spans) != expected_provider_call_count:
+            return TracePersistenceResult(
+                status="HIERARCHY_INCOMPLETE",
+                reason="Persisted trace is missing expected provider-call spans.",
+                persisted_span_count=len(spans),
+                persisted_provider_call_count=persisted_provider_count,
+            )
+        if any(
+            str(getattr(span, "parent_id", None)) not in metric_by_id
+            for span in provider_spans
+        ):
+            return TracePersistenceResult(
+                status="HIERARCHY_INCOMPLETE",
+                reason="A persisted provider-call span is not parented by a RAGAS metric span.",
+                persisted_span_count=len(spans),
+                persisted_provider_call_count=persisted_provider_count,
+            )
+        if "ERROR" in state:
+            return TracePersistenceResult(
+                status="FAILED",
+                reason="MLflow persisted the exact trace with an error state.",
+                persisted_span_count=len(spans),
+                persisted_provider_call_count=persisted_provider_count,
+            )
+        return TracePersistenceResult(
+            status="CONFIRMED",
+            reason="The exact evaluation trace and all expected spans are persisted.",
+            persisted_span_count=len(spans),
+            persisted_provider_call_count=persisted_provider_count,
+        )
 
 
 def build_tracer(
@@ -339,6 +558,27 @@ def trace_id_from_span(span: TraceSpan) -> str | None:
     return trace_id if isinstance(trace_id, str) and trace_id else None
 
 
+def span_id_from_span(span: TraceSpan) -> str | None:
+    """Read a span ID without depending on one concrete tracing implementation."""
+
+    span_id = getattr(span, "span_id", None)
+    return str(span_id) if span_id is not None and str(span_id) else None
+
+
+def validate_mlflow_client_request_id(value: str) -> str:
+    """Fail before export when an MLflow client request ID exceeds VARCHAR(50)."""
+
+    if not value or len(value) > 50:
+        raise ValueError("MLflow client_request_id must contain 1 to 50 characters")
+    return value
+
+
+def _is_missing_trace(error: Exception) -> bool:
+    code = getattr(error, "error_code", None)
+    rendered = f"{code} {error}".upper()
+    return "RESOURCE_DOES_NOT_EXIST" in rendered or "NOT FOUND" in rendered
+
+
 def chunk_summaries(chunks: Sequence[RetrievedChunk]) -> list[dict[str, Any]]:
     """Compact ranking details suitable for spans without embedding vectors or full text."""
 
@@ -347,20 +587,34 @@ def chunk_summaries(chunks: Sequence[RetrievedChunk]) -> list[dict[str, Any]]:
             "dense_rank": item.dense_rank,
             "sparse_rank": item.sparse_rank,
             "retrieval_score": item.score,
+            "dense_score": item.dense_score,
+            "sparse_score": item.sparse_score,
+            "rrf_score": item.rrf_score,
             "rerank_score": item.rerank_score,
         }
         for item in chunks
     ]
 
 
-def retriever_documents(chunks: Sequence[RetrievedChunk]) -> list[dict[str, Any]]:
-    """Final contexts in MLflow's standard retriever-span document schema."""
+def approved_retriever_documents(
+    chunks: Sequence[RetrievedChunk],
+    *,
+    content_policy: TraceContentPolicy,
+) -> list[dict[str, Any]]:
+    """Authorized contexts in MLflow's retriever schema for approved evaluation only."""
+
+    if content_policy is not TraceContentPolicy.APPROVED_PUBLIC_EVALUATION:
+        raise ValueError("Retriever document text requires approved PUBLIC evaluation policy")
 
     return [
         {
-            "id": f"context-{rank}",
-            "page_content": "[CONTENT OMITTED FROM TELEMETRY]",
-            "metadata": {"rank": rank},
+            "id": item.chunk.chunk_id,
+            "page_content": item.chunk.text,
+            "metadata": {
+                "rank": rank,
+                "document_id": item.chunk.document_id,
+                "title": str(item.chunk.metadata.get("title") or "Untitled source"),
+            },
         }
         for rank, item in enumerate(chunks, start=1)
     ]

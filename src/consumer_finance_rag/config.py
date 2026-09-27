@@ -9,6 +9,11 @@ import yaml
 from pydantic import BaseModel, Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, PydanticBaseSettingsSource, SettingsConfigDict
 
+from consumer_finance_rag.quality_policy import (
+    MonitoringSettings,
+    QualityPolicySettings,
+)
+
 
 class HuggingFaceModelSettings(BaseModel):
     provider: Literal["huggingface"] = "huggingface"
@@ -139,6 +144,29 @@ class PublicShowcaseSettings(BaseModel):
     max_concurrent_requests: int = Field(default=2, ge=1, le=32)
 
 
+class JudgeProfileSettings(BaseModel):
+    """Operator-selectable judge identity; generation remains independently configured."""
+
+    name: str = Field(min_length=1)
+    configuration_uri: str = Field(pattern=r"^bedrock:/[^/].+")
+    region: str = Field(min_length=1)
+
+
+class PrivateWorkbenchSettings(BaseModel):
+    """Explicit defaults and bounds for operator-triggered approved evaluation."""
+
+    automatic_evaluation_enabled: bool = True
+    default_mlflow_judges: bool = True
+    default_ragas: bool = True
+    default_save_to_mlflow: bool = True
+    max_evaluation_cases: int = Field(default=2, ge=1, le=100)
+    judge_call_debug_directory: Path = Path(
+        "reports/evaluation/private_judge_calls"
+    )
+    judge_call_debug_retention_hours: int = Field(default=24, ge=1, le=168)
+    judge_profiles: tuple[JudgeProfileSettings, ...] = ()
+
+
 class DriftMonitoringSettings(BaseModel):
     """Explicit Phase 4 assessment thresholds; no lifecycle action is attached."""
 
@@ -157,7 +185,19 @@ class MLflowSettings(BaseModel):
     evaluation_experiment_name: str = "consumer-finance-rag-evaluation"
     evaluation_dataset_name: str = "consumer-finance-seed-evaluation-v1"
     judge_model: str | None = None
+    judge_region: str | None = None
+    ragas_judge_max_tokens: int = Field(default=1024, ge=256, le=8192)
+    ragas_context_precision_max_tokens: int = Field(default=2048, ge=256, le=8192)
     report_directory: Path = Path("reports/evaluation")
+
+    @model_validator(mode="after")
+    def context_precision_budget_is_not_lower(self) -> MLflowSettings:
+        if self.ragas_context_precision_max_tokens < self.ragas_judge_max_tokens:
+            raise ValueError(
+                "ragas_context_precision_max_tokens cannot be lower than "
+                "ragas_judge_max_tokens"
+            )
+        return self
 
 
 class EvaluationSettings(BaseModel):
@@ -206,6 +246,9 @@ class AppSettings(BaseSettings):
     retrieval: RetrievalSettings = RetrievalSettings()
     context: ContextSettings = ContextSettings()
     public_showcase: PublicShowcaseSettings = PublicShowcaseSettings()
+    private_workbench: PrivateWorkbenchSettings = PrivateWorkbenchSettings()
+    quality_policy: QualityPolicySettings = QualityPolicySettings()
+    online_monitoring: MonitoringSettings = MonitoringSettings()
     drift_monitoring: DriftMonitoringSettings = DriftMonitoringSettings()
     mlflow: MLflowSettings = MLflowSettings()
     evaluation: EvaluationSettings = EvaluationSettings()
@@ -234,6 +277,7 @@ class BedrockEnvironment(BaseSettings):
     aws_region: str | None = None
     mlflow_tracking_uri: str | None = None
     mlflow_genai_judge_default_model: str | None = None
+    mlflow_genai_judge_region: str | None = None
 
 
 def load_settings(path: str | Path = "config/config.yaml") -> AppSettings:
@@ -260,6 +304,10 @@ def load_settings(path: str | Path = "config/config.yaml") -> AppSettings:
         mlflow_updates["tracking_uri"] = env.mlflow_tracking_uri
     if env.mlflow_genai_judge_default_model:
         mlflow_updates["judge_model"] = env.mlflow_genai_judge_default_model
+    if env.mlflow_genai_judge_region:
+        mlflow_updates["judge_region"] = env.mlflow_genai_judge_region
+    elif settings.mlflow.judge_region is None:
+        mlflow_updates["judge_region"] = env.aws_region or settings.aws.region
     if mlflow_updates:
         updates["mlflow"] = settings.mlflow.model_copy(update=mlflow_updates)
     return settings.model_copy(update=updates)

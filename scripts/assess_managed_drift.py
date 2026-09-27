@@ -32,6 +32,11 @@ from consumer_finance_rag.drift import (
     summarize_physical_validation,
     write_drift_report,
 )
+from consumer_finance_rag.evaluation.judge_preflight import (
+    JudgePreflightResult,
+    JudgePreflightStatus,
+    preflight_bedrock_judge,
+)
 from consumer_finance_rag.evaluation.managed_rag import (
     CollectingRetrievalTelemetrySink,
     ManagedRAGEvaluationDataset,
@@ -146,7 +151,16 @@ def _validate_modes(args: argparse.Namespace, settings: AppSettings) -> str | No
     except JudgeConfigurationError as exc:
         raise SystemExit(str(exc)) from exc
     if args.with_ragas:
-        build_ragas_evaluator(enabled=True, judge_model=judge_model, references={})
+        build_ragas_evaluator(
+            enabled=True,
+            judge_model=judge_model,
+            judge_region=settings.mlflow.judge_region,
+            references={},
+            judge_max_tokens=settings.mlflow.ragas_judge_max_tokens,
+            context_precision_max_tokens=(
+                settings.mlflow.ragas_context_precision_max_tokens
+            ),
+        )
     return judge_model
 
 
@@ -259,6 +273,7 @@ def _evaluate_pair(
     with_mlflow_judges: bool,
     with_ragas: bool,
     judge_model: str | None,
+    judge_preflight: JudgePreflightResult | None,
 ) -> tuple[ManagedRAGEvaluationReport, ManagedRAGEvaluationReport]:
     baseline_pipeline = (
         _pipeline(
@@ -286,11 +301,13 @@ def _evaluate_pair(
         configured_corpus_key=settings.managed_ingestion.corpus_key,
         pipeline=baseline_pipeline,
         generation_model=settings.models.generation.model if generate else None,
+        generation_region=settings.aws.region if generate else None,
         judge_model=judge_model,
         with_mlflow_judges=with_mlflow_judges,
         with_ragas=with_ragas,
         mlflow_settings=settings.mlflow,
         telemetry_sink=baseline_telemetry,
+        judge_preflight=judge_preflight,
     )
     candidate_report = evaluate_managed_rag(
         candidate_runtime,
@@ -298,11 +315,13 @@ def _evaluate_pair(
         configured_corpus_key=settings.managed_ingestion.corpus_key,
         pipeline=candidate_pipeline,
         generation_model=settings.models.generation.model if generate else None,
+        generation_region=settings.aws.region if generate else None,
         judge_model=judge_model,
         with_mlflow_judges=with_mlflow_judges,
         with_ragas=with_ragas,
         mlflow_settings=settings.mlflow,
         telemetry_sink=candidate_telemetry,
+        judge_preflight=judge_preflight,
     )
     return baseline_report, candidate_report
 
@@ -372,6 +391,22 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     settings = load_settings(args.config)
     judge_model = _validate_modes(args, settings)
+    judge_preflight = (
+        preflight_bedrock_judge(settings.mlflow) if judge_model is not None else None
+    )
+    if judge_preflight is not None:
+        available = (
+            args.with_mlflow_judges
+            and judge_preflight.mlflow_genai.status is JudgePreflightStatus.AVAILABLE
+        ) or (
+            args.with_ragas
+            and judge_preflight.ragas.status is JudgePreflightStatus.AVAILABLE
+        )
+        if not available:
+            raise SystemExit(
+                "No requested judge backend passed preflight: "
+                f"{judge_preflight.metadata_reason}"
+            )
     require_database_url(settings.database)
     thresholds = DriftThresholds.from_settings(settings.drift_monitoring)
     dataset = load_managed_rag_dataset(
@@ -496,6 +531,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     with_mlflow_judges=bool(args.with_mlflow_judges),
                     with_ragas=bool(args.with_ragas),
                     judge_model=judge_model,
+                    judge_preflight=judge_preflight,
                 )
                 retrieval = assess_retrieval_regression(
                     retrieval_report_from_managed_evaluation(

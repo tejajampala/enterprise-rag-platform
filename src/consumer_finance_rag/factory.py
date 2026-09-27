@@ -19,6 +19,7 @@ from consumer_finance_rag.lineage.database import (
     require_database_url,
 )
 from consumer_finance_rag.lineage.managed_retrieval import (
+    ManagedRetrievalRuntime,
     build_managed_retrieval_runtime,
 )
 from consumer_finance_rag.lineage.repository import LineageRepository
@@ -51,6 +52,7 @@ class RetrievalRuntime:
     qdrant_collection: str
     generation: int | None = None
     index_state_id: UUID | None = None
+    managed_runtime: ManagedRetrievalRuntime | None = None
 
     def display_metadata(self) -> tuple[tuple[str, str], ...]:
         """Return only metadata appropriate for unobtrusive UI display."""
@@ -180,6 +182,7 @@ def build_runtime_retrieval(
         qdrant_collection=managed.qdrant_collection,
         generation=managed.generation,
         index_state_id=managed.index_state_id,
+        managed_runtime=managed,
     )
 
 
@@ -244,7 +247,14 @@ def build_application_runtime(
             tracer,
             telemetry_sink=telemetry_sink,
         )
-        runtime = replace(retrieval_runtime, retrieval_service=service)
+        managed_runtime = retrieval_runtime.managed_runtime
+        if managed_runtime is not None:
+            managed_runtime = replace(managed_runtime, retrieval_service=service)
+        runtime = replace(
+            retrieval_runtime,
+            retrieval_service=service,
+            managed_runtime=managed_runtime,
+        )
     managed = runtime.profile == "managed"
     pipeline = _compose_pipeline(
         settings,
@@ -282,6 +292,7 @@ def _retrieval_with_tracer(
         pii_detector=service.pii_detector,
         telemetry_context=service.telemetry_context,
         telemetry_sink=telemetry_sink or service.telemetry_sink,
+        inspection_sink=service.inspection_sink,
     )
 
 

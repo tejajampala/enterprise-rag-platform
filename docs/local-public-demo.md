@@ -146,12 +146,17 @@ switch off whenever the demo is unattended.
 Run private tools on separate loopback ports:
 
 ```powershell
-uv run streamlit run app/operations_dashboard.py `
+uv run streamlit run app/private_workbench.py `
   --server.address 127.0.0.1 `
   --server.port 8502
+
+uv run streamlit run app/operations_dashboard.py `
+  --server.address 127.0.0.1 `
+  --server.port 8503
 ```
 
-- Operations dashboard: <http://127.0.0.1:8502>
+- Private workbench: <http://127.0.0.1:8502>
+- Legacy operations dashboard: <http://127.0.0.1:8503>
 - MLflow: <http://127.0.0.1:5000>
 - Qdrant API: <http://127.0.0.1:6333>
 
